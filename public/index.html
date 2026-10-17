@@ -1,0 +1,1061 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>组卷网试卷导出</title>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<style>
+:root{--bg:#f1f5f9;--card:#fff;--text:#0f172a;--muted:#64748b;--accent:#2563eb;--accent-d:#1d4ed8;--border:#e2e8f0;--ok:#16a34a;--err:#dc2626}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:15px/1.6 "Microsoft YaHei","PingFang SC",system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:24px 14px}
+.wrap{max-width:680px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px;box-shadow:0 2px 12px #0f172a0d;margin-bottom:16px}
+h1{font-size:20px;margin-bottom:4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+label.field{display:block;font-size:13px;color:var(--muted);margin:14px 0 6px}
+input[type=url]{width:100%;padding:11px 12px;border:1px solid var(--border);border-radius:9px;font-size:14px;outline:none}
+input[type=url]:focus{border-color:var(--accent);box-shadow:0 0 0 3px #2563eb22}
+.formats{display:flex;gap:8px;flex-wrap:wrap}
+.fmt{flex:1;min-width:120px;border:1px solid var(--border);border-radius:9px;padding:10px 12px;cursor:pointer;text-align:center;font-size:14px;user-select:none;transition:.15s}
+.fmt input{display:none}
+.fmt.on{border-color:var(--accent);background:#eff6ff;color:var(--accent-d);font-weight:600}
+.opts{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:14px}
+.opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
+button.go{width:100%;margin-top:18px;padding:13px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:.15s}
+button.go:hover:not(:disabled){background:var(--accent-d)}
+button.go:disabled{opacity:.5;cursor:not-allowed}
+.status{margin-top:14px;padding:11px 13px;border-radius:9px;font-size:13.5px;display:none}
+.status.show{display:block}
+.status.info{background:#eff6ff;color:#1e40af}
+.status.ok{background:#f0fdf4;color:var(--ok)}
+.status.err{background:#fef2f2;color:var(--err)}
+.bar{height:6px;background:var(--border);border-radius:99px;overflow:hidden;margin-top:10px;display:none}
+.bar.show{display:block}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.result{margin-top:14px;display:none;gap:8px;flex-wrap:wrap}
+.result.show{display:flex}
+.result a{flex:1;min-width:140px;text-align:center;padding:11px;border-radius:9px;text-decoration:none;font-size:14px;font-weight:600}
+.result a.dl{background:var(--ok);color:#fff}
+.result a.cloud{background:#fff;border:1px solid var(--border);color:var(--text)}
+h2{font-size:15px;margin-bottom:10px}
+.hist{font-size:13px}
+.hist li{list-style:none;padding:8px 0;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:10px;align-items:center}
+.hist li:last-child{border-bottom:0}
+.hist a{color:var(--accent);text-decoration:none;word-break:break-all}
+.hist .meta{color:var(--muted);font-size:12px;white-space:nowrap}
+.hist .empty{color:var(--muted)}
+@media (max-width:480px){body{padding:14px 10px}.card{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>组卷网试卷导出</h1>
+    <div class="sub">输入试卷详情页网址（形如 https://zujuan.xkw.com/11p3514663.html），在线生成并下载 Word / PDF，文件同时归档到云端存储。</div>
+
+    <label class="field" for="url">试卷网址</label>
+    <input type="url" id="url" placeholder="https://zujuan.xkw.com/11p3514663.html" autocomplete="off">
+
+    <label class="field">导出格式</label>
+    <div class="formats">
+      <label class="fmt on"><input type="radio" name="fmt" value="docx-hybrid" checked>Word · 可编辑</label>
+      <label class="fmt"><input type="radio" name="fmt" value="docx-image">Word · 整题图片</label>
+      <label class="fmt"><input type="radio" name="fmt" value="pdf">PDF</label>
+    </div>
+
+    <div class="opts">
+      <label><input type="checkbox" id="answers"> 包含答案和解析（仅 PDF，需 Cookie 已登录）</label>
+    </div>
+
+    <button class="go" id="go">生成并下载</button>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="status" id="status"></div>
+    <div class="result" id="result">
+      <a class="dl" id="dlLocal" href="#" download>⬇ 本地下载</a>
+      <a class="cloud" id="dlCloud" href="#" target="_blank" rel="noopener">☁ 云端存档下载</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>导出记录（云端存储）</h2>
+    <ul class="hist" id="hist"><li class="empty">加载中…</li></ul>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ================================================================
+ * 以下核心代码移植自「组卷网试卷导出.user.js」v13.2.0：
+ *  - zip / crc32 / docx OOXML 生成：原样保留
+ *  - collect() 题目采集、hybridContent() 混合排版：原样保留（仅把
+ *    全局 document/getComputedStyle 改为按元素所属文档取值，以便在
+ *    隐藏 iframe 渲染的沙箱文档上运行）
+ *  - inlineImages：原 fetch 直取改为走 /api/img 同源代理（解决跨域与防盗链）
+ * 无法迁移部分：
+ *  - window.print() 另存 PDF → 改为 html2canvas 切片 + jsPDF 直接生成 PDF 文件
+ *  - __ZujuanApp*（App 内原生桥）：网页环境不存在，已移除
+ *  - GM_* API：原脚本 @grant none，未使用，无需替代
+ * ================================================================ */
+
+const $ = s => document.querySelector(s);
+const statusEl = $('#status'), barEl = $('#bar'), barI = barEl.querySelector('i');
+function status(msg, kind='info'){ statusEl.textContent = msg; statusEl.className = 'status show ' + kind; }
+function progress(p){ barEl.classList.add('show'); barI.style.width = Math.round(p*100)+'%'; }
+function clearProgress(){ barEl.classList.remove('show'); barI.style.width='0'; }
+
+/* ---------- 基础工具（原样移植） ---------- */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+const u8 = s => new TextEncoder().encode(s);
+const crcTable = Array.from({length:256}, (_,i) => { for(let j=0;j<8;j++) i=(i&1)?(0xedb88320^(i>>>1)):(i>>>1); return i>>>0; });
+function crc32(bytes) { let c=0xffffffff; for(const x of bytes) c=crcTable[(c^x)&255]^(c>>>8); return (c^0xffffffff)>>>0; }
+function zip(files) {
+  const chunks=[], directory=[]; let offset=0;
+  const le16=(d,o,v)=>d.setUint16(o,v,true), le32=(d,o,v)=>d.setUint32(o,v,true);
+  for(const file of files) {
+    const name=u8(file.name), data=file.data, crc=crc32(data);
+    const h=new Uint8Array(30+name.length), d=new DataView(h.buffer);
+    le32(d,0,0x04034b50);le16(d,4,20);le16(d,6,0x0800);le16(d,8,0);le16(d,10,0);le16(d,12,0);le32(d,14,crc);le32(d,18,data.length);le32(d,22,data.length);le16(d,26,name.length);le16(d,28,0);h.set(name,30);
+    chunks.push(h,data);
+    const c=new Uint8Array(46+name.length),v=new DataView(c.buffer);
+    le32(v,0,0x02014b50);le16(v,4,20);le16(v,6,20);le16(v,8,0x0800);le16(v,10,0);le16(v,12,0);le16(v,14,0);le32(v,16,crc);le32(v,20,data.length);le32(v,24,data.length);le16(v,28,name.length);le16(v,30,0);le16(v,32,0);le16(v,34,0);le16(v,36,0);le32(v,38,0);le32(v,42,offset);c.set(name,46);directory.push(c);
+    offset+=h.length+data.length;
+  }
+  const dirSize=directory.reduce((n,c)=>n+c.length,0), end=new Uint8Array(22),e=new DataView(end.buffer);
+  le32(e,0,0x06054b50);le16(e,4,0);le16(e,6,0);le16(e,8,files.length);le16(e,10,files.length);le32(e,12,dirSize);le32(e,16,offset);le16(e,20,0);
+  return new Blob([...chunks,...directory,end],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+function dataBytes(url) {const s=atob(url.split(',')[1]),a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a;}
+function toDataURL(blob) {return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob);});}
+
+/* ---------- docx 段落/图片构件（原样移植） ---------- */
+function para(text,size=22,bold=false,align='') { return `<w:p><w:pPr><w:spacing w:before="80" w:after="80"/>${align?`<w:jc w:val="${align}"/>`:''}</w:pPr><w:r><w:rPr><w:rFonts w:ascii="Microsoft YaHei" w:hAnsi="Microsoft YaHei" w:eastAsia="微软雅黑"/><w:sz w:val="${size}"/>${bold?'<w:b/>':''}</w:rPr><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>`; }
+function imageRun(id,cx,cy,name,ext='png') { return `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="${esc(name)}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="${esc(name)}.${ext}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`; }
+function imagePara(id,cx,cy,name,ext='png') { return `<w:p><w:pPr><w:spacing w:after="120"/></w:pPr>${imageRun(id,cx,cy,name,ext)}</w:p>`; }
+function richPara(nodes, block) {
+  const runs=[];
+  const walk=(node, format={})=>{
+    if(node.nodeType===3){
+      const value=(node.nodeValue||'').replace(/[\r\n\t]+/g,' ').replace(/ {2,}/g,' ');
+      if(!value) return;
+      const font=esc(format.font||'Microsoft YaHei');
+      const props=`<w:rFonts w:ascii="${font}" w:eastAsia="${font}"/><w:sz w:val="22"/>${format.bold?'<w:b/>':''}${format.italic?'<w:i/>':''}${format.underline?`<w:u w:val="${format.underline}"/>`:''}${format.vert?`<w:vertAlign w:val="${format.vert}"/>`:''}`;
+      runs.push(`<w:r><w:rPr>${props}</w:rPr><w:t xml:space="preserve">${esc(value)}</w:t></w:r>`);
+      return;
+    }
+    if(node.nodeType!==1) return;
+    const tag=node.tagName.toLowerCase();
+    if(tag==='br'){runs.push('<w:r><w:br/></w:r>');return;}
+    const style=node.style||{};
+    const next={...format};
+    if(tag==='b'||tag==='strong'||style.fontWeight==='bold'||Number(style.fontWeight)>=600) next.bold=true;
+    if(tag==='i'||tag==='em'||style.fontStyle==='italic') next.italic=true;
+    if(tag==='u'||String(style.textDecoration||'').includes('underline')) next.underline='single';
+    if(tag==='wave') next.underline='wave';
+    if(tag==='dot') next.underline='dotted';
+    if(tag==='sup') next.vert='superscript';
+    if(tag==='sub') next.vert='subscript';
+    if(style.fontFamily) next.font=style.fontFamily.split(',')[0].replace(/["']/g,'').trim();
+    for(const child of node.childNodes) walk(child,next);
+  };
+  for(const node of nodes) walk(node);
+  if(!runs.length||!nodes.map(n=>n.textContent||'').join('').trim()) return '';
+  const align=block?.style?.textAlign;
+  const indent=block?.style?.textIndent;
+  const pPr=`<w:spacing w:before="0" w:after="70" w:line="300" w:lineRule="auto"/>${align==='center'||align==='right'?`<w:jc w:val="${align}"/>`:''}${indent&&indent!=='0px'?'<w:ind w:firstLine="420"/>':''}`;
+  return `<w:p><w:pPr>${pPr}</w:pPr>${runs.join('')}</w:p>`;
+}
+function editableContent(node) {
+  const paragraphs=[];
+  const emitContainer=container=>{
+    let pending=[];
+    const flush=()=>{const p=richPara(pending,container);if(p)paragraphs.push(p);pending=[];};
+    for(const child of container.childNodes){
+      if(child.nodeType===1){
+        const tag=child.tagName.toLowerCase();
+        if(tag==='br'){flush();continue;}
+        if(tag==='p'||tag==='li'||tag==='blockquote'){
+          flush();const p=richPara([...child.childNodes],child);if(p)paragraphs.push(p);continue;
+        }
+        if(tag==='table'){
+          flush();
+          for(const row of child.rows) for(const cell of row.cells){
+            const p=richPara([...cell.childNodes],cell);if(p)paragraphs.push(p);
+          }
+          continue;
+        }
+        if(tag==='div'&&child.querySelector('p,table,div,li')){flush();emitContainer(child);continue;}
+      }
+      pending.push(child);
+    }
+    flush();
+  };
+  emitContainer(node);
+  return paragraphs;
+}
+
+/* ---------- 混合排版（原样移植，getComputedStyle 改取元素所属窗口） ---------- */
+async function hybridContent(root, registerImage, maxWidth) {
+  const win = root.ownerDocument.defaultView;
+  const doc = root.ownerDocument;
+  const getCS = el => win.getComputedStyle(el);
+  const rootFont=parseFloat(getCS(root).fontSize)||14;
+  const unit=22*6350/rootFont;
+  const hidden=n=>n.nodeType===1&&(n.hidden||getCS(n).display==='none'||getCS(n).visibility==='hidden');
+  const cjk=f=>/宋体|simsun|nsimsun|黑体|heiti|楷体|kaiti|仿宋|fangsong|雅黑|yahei|微软|苹方|pingfang|思源|source han|noto sans cjk|stkaiti|stsong/i.test(f);
+  const paint=(source,w,h,scale)=>{
+    const canvas=doc.createElement('canvas');
+    canvas.width=Math.max(1,Math.ceil(w*scale));canvas.height=Math.max(1,Math.ceil(h*scale));
+    const ctx=canvas.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(source,0,0,canvas.width,canvas.height);
+    return dataBytes(canvas.toDataURL('image/png'));
+  };
+  const complex=n=>{
+    if(n.nodeType!==1) return false;
+    if(n.matches('svg,canvas,math,mjx-container,.MathJax,.katex,ruby,object,embed,iframe')) return true;
+    const text=(n.textContent||'').replace(/\s+/g,'').length;
+    const bg=getCS(n).backgroundImage||'';
+    if(/url\(/i.test(bg)&&text<12) return true;
+    const abs=[...n.children].some(c=>['absolute','fixed'].includes(getCS(c).position));
+    return abs&&(n.querySelector('img,svg,canvas')||text<12);
+  };
+  const color=v=>{const m=String(v).match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);return m?m.slice(1).map(x=>(+x).toString(16).padStart(2,'0')).join(''):'000000';};
+  const textRun=(value,el,extra='')=>{
+    const s=getCS(el);
+    const vert=el.closest('sup,sub');
+    const families=(el.getAttribute('word-font')||el.closest('[word-font]')?.getAttribute('word-font')||s.fontFamily||'').split(',').map(x=>x.replace(/["']/g,'').trim()).filter(Boolean);
+    const ascii=esc(families.find(f=>f&&!cjk(f))||'Times New Roman');
+    const eastRaw=families.find(cjk)||'宋体';
+    const east=esc(/simsun|nsimsun/i.test(eastRaw)?'宋体':/yahei/i.test(eastRaw)?'微软雅黑':eastRaw);
+    const fontSize=vert?22:Math.max(12,Math.min(48,Math.round((parseFloat(s.fontSize)||rootFont)/rootFont*22)));
+    const deco=s.textDecorationLine||'';
+    const u=el.closest('wave')?'wave':(el.closest('u')||deco.includes('underline'))?'single':'';
+    const em=el.closest('dot')?'<w:em w:val="underDot"/>':'';
+    const props=`<w:rFonts w:ascii="${ascii}" w:hAnsi="${ascii}" w:eastAsia="${east}" w:cs="${ascii}"/>${+s.fontWeight>=600||el.closest('b,strong')?'<w:b/>':''}${s.fontStyle==='italic'||el.closest('i,em')?'<w:i/>':''}${deco.includes('line-through')?'<w:strike/>':''}<w:color w:val="${color(s.color)}"/><w:sz w:val="${fontSize}"/>${u?`<w:u w:val="${u}"/>`:''}${em}${vert?`<w:vertAlign w:val="${vert.tagName==='SUP'?'superscript':'subscript'}"/>`:''}${extra}`;
+    return `<w:r><w:rPr>${props}</w:rPr><w:t xml:space="preserve">${esc(value)}</w:t></w:r>`;
+  };
+  const graphic=async(el,width)=>{
+    const rect=el.getBoundingClientRect();
+    if(!rect.width||!rect.height) throw new Error('有图形没有可用尺寸，请待页面完整显示后再导出。');
+    let data,extension='png';
+    if(el.tagName==='IMG'){
+      if(!el.complete||!el.naturalWidth) throw new Error('有公式或图片未能加载，已停止导出以免漏题。');
+      const src=el.currentSrc||el.src||'';
+      if(/^data:image\/(png|jpeg);base64,/i.test(src)){
+        data=dataBytes(src);extension=/jpeg/i.test(src)?'jpg':'png';
+      }else{
+        const isSvg=/svg/i.test(src);
+        const scale=Math.min(4096/rect.width,4096/rect.height,Math.max(3,isSvg?3:el.naturalWidth/rect.width));
+        data=paint(el,rect.width,rect.height,scale);
+      }
+    }else if(el.tagName.toLowerCase()==='svg'){
+      const svg=el.cloneNode(true);svg.setAttribute('xmlns','http://www.w3.org/2000/svg');
+      const original=[el,...el.querySelectorAll('*')],copies=[svg,...svg.querySelectorAll('*')];
+      original.forEach((n,i)=>{
+        const s=getCS(n);
+        for(const p of ['font-family','font-size','font-weight','font-style','fill','stroke','stroke-width','color','opacity','text-anchor']){
+          const v=s.getPropertyValue(p);if(v)copies[i].style.setProperty(p,v);
+        }
+        const fill=s.getPropertyValue('fill');
+        if(!fill||fill==='none'||fill==='transparent') copies[i].style.setProperty('fill',s.color||'#000');
+      });
+      if(!svg.getAttribute('viewBox')) svg.setAttribute('viewBox','0 0 '+rect.width+' '+rect.height);
+      svg.setAttribute('width',rect.width);svg.setAttribute('height',rect.height);
+      const bg=doc.createElementNS('http://www.w3.org/2000/svg','rect');
+      bg.setAttribute('width','100%');bg.setAttribute('height','100%');bg.setAttribute('fill','#ffffff');
+      svg.insertBefore(bg,svg.firstChild);
+      const img=new Image();img.src='data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(new XMLSerializer().serializeToString(svg))));
+      await img.decode();
+      data=paint(img,rect.width,rect.height,3);
+    }else if(el.tagName==='CANVAS'){
+      data=paint(el,rect.width,rect.height,Math.min(3,el.width/Math.max(1,rect.width))||3);
+    }else{
+      if(el.matches('iframe,object,embed')) throw new Error('当前题目含嵌入式内容，请改用整题图片模式并检查结果。');
+      const canvas=await html2canvas(el,{backgroundColor:'#ffffff',scale:3,useCORS:true,allowTaint:false,logging:false});
+      data=dataBytes(canvas.toDataURL('image/png'));
+    }
+    const ratio=Math.min(unit,width/rect.width,9.4*914400/rect.height);
+    const cx=Math.max(1,Math.round(rect.width*ratio)),cy=Math.max(1,Math.round(rect.height*ratio));
+    const id=registerImage(data,extension);
+    let drawing=imageRun(id,cx,cy,'公式或插图',extension);
+    const va=getCS(el).verticalAlign;
+    if(va==='middle'&&rect.height<42){
+      const pos=Math.round(cy/12700-11);
+      if(pos) drawing=drawing.replace('<w:r>','<w:r><w:rPr><w:position w:val="'+(-pos)+'"/></w:rPr>');
+    }
+    return drawing;
+  };
+  const inline=async(node,width)=>{
+    if(node.nodeType===3){
+      const parent=node.parentElement;if(!parent) return '';
+      const s=getCS(parent);
+      const raw=node.nodeValue||'';
+      let text=/pre/.test(s.whiteSpace)?raw:raw.replace(/[\r\n\t]+/g,' ').replace(/ {2,}/g,' ');
+      if(!/pre/.test(s.whiteSpace)){
+        if(/^[\r\n\t]/.test(raw)) text=text.replace(/^ /,'');
+        if(/[\r\n\t]$/.test(raw)) text=text.replace(/ $/,'');
+      }
+      if(!text||text===' ') return '';
+      return textRun(text,parent);
+    }
+    if(node.nodeType!==1||hidden(node)||node.matches('script,style,noscript')) return '';
+    if(node.tagName==='BR') return '<w:r><w:br/></w:r>';
+    if(node.tagName==='BK'){
+      const n=Math.max(6,Number(node.getAttribute('size'))||10);
+      let fill=(node.textContent||'').replace(/\s+/g,'');
+      if(!fill) fill='_'.repeat(n);
+      else if(/^\d{1,3}$/.test(fill)){
+        const pad=Math.max(2,n-fill.length),left=Math.ceil(pad/2);
+        fill='_'.repeat(left)+fill+'_'.repeat(pad-left);
+      }
+      return textRun(fill,node,'<w:u w:val="single"/>');
+    }
+    if(node.tagName==='IMG'||complex(node)) return graphic(node,width);
+    let out='';for(const child of node.childNodes) out+=await inline(child,width);return out;
+  };
+  const letterAtom=/^[A-H][．.、)）]/,numAtom=/^\d{1,3}[.．、)）]\s*$/;
+  const plain=n=>(n.textContent||'').replace(/\s+/g,' ').trim();
+  const optMarks=t=>(String(t).match(/[A-H][．.、)）]/g)||[]);
+  const numMarks=t=>(String(t).match(/\d{1,3}[.．、)）]/g)||[]);
+  const atomKind=n=>{
+    if(n.nodeType===3){
+      const t=plain(n);
+      if(numAtom.test(t)) return 'num';
+      if(letterAtom.test(t)&&optMarks(t).length===1&&numMarks(t).length===0) return 'opt';
+      return '';
+    }
+    if(n.nodeType!==1||hidden(n)||n.matches('br,table,bk,img,script,style,noscript')) return '';
+    if(complex(n)) return '';
+    const t=plain(n);
+    if(optMarks(t).length>1||(numMarks(t).length>=1&&optMarks(t).length>=1)) return '';
+    if(numAtom.test(t)) return 'num';
+    if(letterAtom.test(t)&&optMarks(t).length===1&&!n.querySelector('table,p,div,ul,ol,bk')) return 'opt';
+    return '';
+  };
+  const parseClozeString=raw=>{
+    const text=String(raw).replace(/[\u200b\u00ad\ufeff]/g,'').replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xFF10+48)).replace(/\u00a0|\u3000/g,' ').replace(/[ \t\r\n]+/g,' ').trim();
+    if(!text||text.length>8000) return null;
+    const re=/(\d{1,3})\s*([.．·・、)）])\s*|([A-H])\s*([.．·・、)）])\s*/g;
+    const marks=[]; let m;
+    while((m=re.exec(text))) marks.push({i:m.index,end:re.lastIndex,num:m[1],letter:m[3],punct:m[2]||m[4]});
+    if(marks.length<4) return null;
+    if(text.slice(0,marks[0].i).trim()) return null;
+    const items=[];
+    for(let k=0;k<marks.length;k++){
+      const body=text.slice(marks[k].end,k+1<marks.length?marks[k+1].i:text.length).replace(/\s+/g,' ').trim();
+      const mk=marks[k];
+      if(mk.num){
+        if(body) return null;
+        items.push({kind:'num',text:mk.num+(mk.punct==='.'||mk.punct==='．'?mk.punct:'．')});
+      }else{
+        if(!body||body.length>48) return null;
+        const punct=mk.punct==='.'||mk.punct==='．'?mk.punct:'．';
+        items.push({kind:'opt',text:mk.letter+punct+body});
+      }
+    }
+    const rows=[]; let i=0;
+    while(i<items.length){
+      if(items[i].kind!=='num') return null;
+      const num=items[i++]; const opts=[];
+      while(i<items.length&&items[i].kind==='opt') opts.push(items[i++]);
+      if(opts.length<3||opts.length>7) return null;
+      if(opts[0].text[0]!=='A'||opts.some((o,k)=>o.text.charCodeAt(0)!==65+k)) return null;
+      rows.push({num,opts});
+    }
+    return rows.length?rows:null;
+  };
+  const splitOptionText=(t,node)=>{
+    const rows=parseClozeString(t);
+    if(!rows) return null;
+    const out=[];
+    for(const row of rows){
+      out.push({kind:'num',node,text:row.num.text});
+      for(const o of row.opts) out.push({kind:'opt',node,text:o.text});
+    }
+    return out.length>=4?out:null;
+  };
+  const collectAtoms=nodes=>{
+    const out=[];
+    const walk=n=>{
+      if(n.nodeType===3){
+        const t=(n.nodeValue||'').replace(/[\r\n\t]+/g,' ').replace(/ {2,}/g,' ').trim();
+        if(!t) return;
+        const kind=atomKind(n);
+        if(kind){out.push({kind,node:n});return;}
+        const pieces=splitOptionText(t,n.parentElement||n);
+        if(pieces){out.push(...pieces);return;}
+        out.push({kind:'text',node:n});
+        return;
+      }
+      if(n.nodeType!==1||hidden(n)) return;
+      if(n.tagName==='BR'){out.push({kind:'br',node:n});return;}
+      const kind=atomKind(n);
+      if(kind){out.push({kind,node:n});return;}
+      if(!complex(n)&&n.tagName!=='IMG'&&n.tagName!=='BK'&&n.tagName!=='TABLE'){
+        for(const c of n.childNodes) walk(c);
+        return;
+      }
+      out.push({kind:'text',node:n});
+    };
+    for(const n of nodes) walk(n);
+    return out;
+  };
+  const optionLabel=o=>(o.text||plain(o.node)).replace(/\s+/g,' ').trim();
+  const normalizeAtoms=atoms=>{
+    const out=[];
+    for(let i=0;i<atoms.length;i++){
+      const a=atoms[i];
+      if(a.kind!=='opt'){out.push(a);continue;}
+      const label=optionLabel(a);
+      if(/^[A-H][．.、)）]$/.test(label)){
+        const words=[];
+        while(i+1<atoms.length&&atoms[i+1].kind==='text'){
+          const next=atoms[i+1];
+          const pt=plain(next.node);
+          if(!pt){ if(next.node.nodeType===1) break; i++; continue; }
+          if(pt.length>80) break;
+          words.push(pt);i++;
+        }
+        const gap=/[．、]$/.test(label)?'':' ';
+        const node=a.node.nodeType===1?a.node:(a.node.parentElement||a.node);
+        out.push({kind:'opt',node,text:(label+gap+words.join(' ')).trim()});
+      }else out.push({kind:'opt',node:a.node,text:a.text||label});
+    }
+    return out;
+  };
+  const sequential=opts=>{
+    const letters=opts.map(o=>optionLabel(o)[0]);
+    return letters[0]==='A'&&letters.every((ch,k)=>ch.charCodeAt(0)===65+k);
+  };
+  const optionBody=o=>optionLabel(o).replace(/^[A-H][．.、)）]\s*/,'').trim();
+  const parseClozeRows=atoms=>{
+    const rows=[];let i=0;
+    const skip=()=>{while(i<atoms.length&&(atoms[i].kind==='br'||(atoms[i].kind==='text'&&!plain(atoms[i].node))))i++;};
+    skip();
+    while(i<atoms.length){
+      if(atoms[i].kind!=='num') break;
+      const save=i,num=atoms[i++];const opts=[];
+      skip();
+      while(i<atoms.length&&atoms[i].kind==='opt'){opts.push(atoms[i++]);skip();}
+      if(opts.length<3||!sequential(opts)||opts.some(o=>optionBody(o).length>80)){i=save;break;}
+      rows.push({num,opts});
+      skip();
+    }
+    if(!rows.length) return null;
+    if(rows.length===1&&i<atoms.length&&atoms.slice(i).some(a=>a.kind!=='br'&&(a.kind!=='text'||plain(a.node)))) return null;
+    return {rows,end:i};
+  };
+  const splitCloze=nodes=>{
+    const atoms=normalizeAtoms(collectAtoms(nodes));
+    if(atoms.length<4) return null;
+    for(let start=0;start<atoms.length;start++){
+      if(atoms[start].kind!=='num') continue;
+      const parsed=parseClozeRows(atoms.slice(start));
+      if(!parsed) continue;
+      return {prefix:atoms.slice(0,start),rows:parsed.rows,suffix:atoms.slice(start+parsed.end)};
+    }
+    return null;
+  };
+  const extractClozeRow=el=>{
+    if(!el||el.nodeType!==1||hidden(el)) return null;
+    let numEl=el.querySelector('[name="subquesnub"], .subquesnub, .subques-num, .subques_nub, [class*="subques"]');
+    let numText='';
+    if(numEl){
+      numText=plain(numEl);
+    }else{
+      const firstText=(el.firstChild?.nodeType===3?el.firstChild.nodeValue:el.firstElementChild?.textContent||'').trim();
+      const m=firstText.match(/^\(?\d{1,3}[.．、)）]/);
+      if(m) numText=m[0];
+    }
+    if(!numText) return null;
+    const optTable=el.querySelector('table[name="optionsTable"], table');
+    if(optTable){
+      const tds=[...optTable.querySelectorAll('td')].filter(td=>!hidden(td));
+      if(tds.length>=3&&tds.every(td=>letterAtom.test(plain(td)))){
+        return {
+          num:{kind:'num',node:numEl||el,text:numText},
+          opts:tds.map(td=>({kind:'opt',node:td,text:plain(td)}))
+        };
+      }
+    }
+    const optNodes=[...el.querySelectorAll('span,div')].filter(n=>letterAtom.test(plain(n))&&optMarks(plain(n)).length===1&&!n.querySelector('span,div,table'));
+    if(optNodes.length>=3&&optNodes[0].textContent.trim()[0]==='A'){
+      return {
+        num:{kind:'num',node:numEl||el,text:numText},
+        opts:optNodes.map(n=>({kind:'opt',node:n,text:plain(n)}))
+      };
+    }
+    const t=plain(el);
+    const parsed=parseClozeString(t);
+    if(parsed&&parsed.length===1){
+      const row=parsed[0];
+      return {
+        num:{kind:'num',node:numEl||el,text:row.num.text},
+        opts:row.opts.map(o=>({kind:'opt',node:el,text:o.text}))
+      };
+    }
+    return null;
+  };
+  const clozeTable=async(rows,container,width)=>{
+    const cols=1+Math.max(...rows.map(r=>r.opts.length));
+    const room=Math.max(cols,Math.round(width/635));
+    const numW=Math.min(Math.max(720,Math.round(room*0.1)),1100);
+    const twips=[numW];
+    const each=Math.max(1,Math.floor((room-numW)/(cols-1)));
+    for(let i=1;i<cols;i++) twips.push(each);
+    twips[twips.length-1]+=room-twips.reduce((a,b)=>a+b,0);
+    const nil='<w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/>';
+    let xml=`<w:tbl><w:tblPr><w:tblCaption w:val="cloze"/><w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="40" w:type="dxa"/><w:left w:w="60" w:type="dxa"/><w:bottom w:w="40" w:type="dxa"/><w:right w:w="60" w:type="dxa"/></w:tblCellMar><w:tblBorders>${nil}<w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders></w:tblPr><w:tblGrid>${twips.map(n=>`<w:gridCol w:w="${n}"/>`).join('')}</w:tblGrid>`;
+    const cell=async(atom,cw)=>{
+      let p='<w:p/>';
+      if(atom){
+        const n=atom.node?.nodeType===1?atom.node:container;
+        if(atom.node&&atom.node.nodeType===1&&atom.node.querySelector('img,svg,canvas,math')){
+          p=await paragraphPlain([...atom.node.childNodes],n,Math.max(635,cw*635));
+        }else if(atom.text){
+          p=`<w:p><w:pPr><w:spacing w:after="0"/></w:pPr>${textRun(atom.text,n)}</w:p>`;
+        }else if(atom.node){
+          p=await paragraphPlain([atom.node],n,Math.max(635,cw*635));
+        }
+      }
+      if(!p) p='<w:p/>';
+      return `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:tcBorders>${nil}</w:tcBorders><w:vAlign w:val="center"/></w:tcPr>${p}</w:tc>`;
+    };
+    for(const row of rows){
+      xml+='<w:tr>';
+      xml+=await cell(row.num,twips[0]);
+      for(let i=0;i<cols-1;i++) xml+=await cell(row.opts[i],twips[i+1]);
+      xml+='</w:tr>';
+    }
+    return xml+'</w:tbl>';
+  };
+  const paragraphPlain=async(nodes,container,width)=>{
+    if(!nodes.some(n=>n.nodeType===1||(n.textContent||'').trim()))return '';
+    let runs='';for(const n of nodes)runs+=await inline(n,width);
+    if(!runs)return '';
+    const s=getCS(container),alignment={center:'center',right:'right',justify:'both'}[s.textAlign];
+    const indent=Math.max(0,Math.round((parseFloat(s.textIndent)||0)*unit/635));
+    let prefix='';if(container.tagName==='LI'){
+      const list=container.parentElement;
+      const index=[...list.children].filter(n=>n.tagName==='LI').indexOf(container)+(Number(list.getAttribute('start'))||1);
+      prefix=textRun(list.tagName==='OL'?index+'. ':'• ',container);
+    }
+    return `<w:p><w:pPr><w:widowControl/><w:spacing w:after="80" w:line="300" w:lineRule="auto"/>${indent?`<w:ind w:firstLine="${indent}"/>`:''}${alignment?`<w:jc w:val="${alignment}"/>`:''}</w:pPr>${prefix}${runs}</w:p>`;
+  };
+  const clozeRowsFromNodes=(nodes,container)=>{
+    let text='', blocked=false;
+    const walk=n=>{
+      if(blocked||!n) return;
+      if(n.nodeType===3){ text+=n.nodeValue||''; return; }
+      if(n.nodeType!==1||hidden(n)) return;
+      if(n.tagName==='BR'){ text+='\n'; return; }
+      if(n.tagName==='BK'||n.tagName==='IMG'||n.tagName==='TABLE'||n.tagName==='SVG'||complex(n)){ blocked=true; return; }
+      for(const child of n.childNodes) walk(child);
+    };
+    for(const n of nodes) walk(n);
+    if(blocked) return null;
+    const rows=parseClozeString(text);
+    if(!rows) return null;
+    const host=container&&container.nodeType===1?container:nodes.find(n=>n.nodeType===1)||container;
+    return rows.map(r=>({num:{kind:'num',node:host,text:r.num.text},opts:r.opts.map(o=>({kind:'opt',node:host,text:o.text}))}));
+  };
+  const paragraph=async(nodes,container,width)=>{
+    const emitSplit=async split=>{
+      let xml='';
+      if(split.prefix.length){
+        const prefixNodes=split.prefix.filter(a=>a.kind!=='br').map(a=>a.node);
+        xml+=await paragraphPlain(prefixNodes,container,width);
+      }
+      xml+=await clozeTable(split.rows,container,width);
+      if(split.suffix&&split.suffix.length){
+        const suffixNodes=split.suffix.filter(a=>a.kind!=='br').map(a=>a.node);
+        xml+=await paragraphPlain(suffixNodes,container,width);
+      }
+      return xml;
+    };
+    const split=splitCloze(nodes);
+    if(split) return emitSplit(split);
+    const plainRows=clozeRowsFromNodes(nodes,container);
+    if(plainRows) return clozeTable(plainRows,container,width);
+    return paragraphPlain(nodes,container,width);
+  };
+  const looksLikeOptions=el=>{
+    if(!el||el.nodeType!==1) return false;
+    const t=plain(el);
+    if(optMarks(t).length<3||t.length>4000) return false;
+    if(el.querySelector('p,table,bk,.qml-stem,img,svg,canvas')) return false;
+    return true;
+  };
+  const mergeAdjacentCloze=parts=>{
+    const out=[],buf=[];
+    const isCloze=s=>typeof s==='string'&&s.startsWith('<w:tbl>')&&s.includes('w:tblCaption w:val="cloze"');
+    const cols=s=>(s.match(/<w:gridCol\b/g)||[]).length;
+    const flush=()=>{
+      if(!buf.length) return;
+      if(buf.length===1){out.push(buf[0]);buf.length=0;return;}
+      const rows=buf.map(s=>(s.match(/<w:tr>[\s\S]*?<\/w:tr>/g)||[]).join('')).join('');
+      const open=buf[0].slice(0,buf[0].indexOf('<w:tr>'));
+      out.push(open+rows+'</w:tbl>');
+      buf.length=0;
+    };
+    for(const part of parts){
+      if(isCloze(part)&&(!buf.length||cols(part)===cols(buf[0]))) buf.push(part);
+      else {flush();out.push(part);}
+    }
+    flush();
+    return out;
+  };
+  const blocks=async(container,width)=>{
+    const out=[];let pending=[];
+    const flush=async()=>{const p=await paragraph(pending,container,width);if(p)out.push(p);pending=[];};
+    for(const child of container.childNodes){
+      if(hidden(child))continue;
+      if(child.nodeType===1){
+        const tag=child.tagName;
+        const clozeRow=extractClozeRow(child);
+        if(clozeRow){
+          await flush();
+          out.push(await clozeTable([clozeRow],container,width));
+          continue;
+        }
+        if(child.querySelector&&child.querySelector('[name="subquesnub"], .subquesnub')){
+          await flush();
+          out.push(...await blocks(child,width));
+          continue;
+        }
+        if(tag==='TABLE'){await flush();out.push(await table(child,width));continue;}
+        if(tag==='BR'){await flush();continue;}
+        if(complex(child)){pending.push(child);continue;}
+        const display=getCS(child).display;
+        if((display==='table'||display==='inline-table')&&looksLikeOptions(child)){
+          await flush();
+          const rowNodes=[...child.children].filter(n=>n.nodeType===1&&!hidden(n));
+          const lines=rowNodes.length&&rowNodes.every(r=>getCS(r).display==='table-row')?rowNodes.map(r=>[...r.childNodes]):[[...child.childNodes]];
+          for(const line of lines){const p=await paragraph(line,child,width);if(p)out.push(p);}
+          continue;
+        }
+        if(/^(P|DIV|LI|UL|OL|BLOCKQUOTE|H[1-6]|SECTION|FIGURE|SPAN)$/.test(tag)){
+          if(/inline/.test(display)&&tag!=='DIV'&&tag!=='P'){
+            if(display!=='table-row'&&display!=='table-cell'&&display!=='block'&&display!=='inline-block'){
+              pending.push(child);continue;
+            }
+          }
+          if(looksLikeOptions(child)&&pending.length){pending.push(child);continue;}
+          await flush();out.push(...await blocks(child,width));continue;
+        }
+      }
+      pending.push(child);
+    }
+    await flush();return mergeAdjacentCloze(out);
+  };
+  const table=async(el,available)=>{
+    const rows=[...el.rows].filter(r=>!hidden(r)),grid=[];
+    const isOptions=el.getAttribute('name')==='optionsTable';
+    const rect=el.getBoundingClientRect();
+    const width=available;
+    rows.forEach((row,r)=>{
+      grid[r]||=[];let c=0;
+      for(const cell of row.cells){
+        while(grid[r][c])c++;
+        const rs=cell.rowSpan===0?rows.length-r:Math.min(cell.rowSpan||1,rows.length-r),cs=Math.max(1,cell.colSpan||1);
+        for(let y=0;y<rs;y++){grid[r+y]||=[];for(let x=0;x<cs;x++)grid[r+y][c+x]={cell,span:cs,continued:y>0,rs};}
+        c+=cs;
+      }
+    });
+    const count=Math.max(0,...grid.map(r=>r.length));if(!count)return '<w:p/>';
+    const room=Math.max(count,Math.round(width/635));
+    let twips;
+    if(isOptions){
+      twips=Array(count).fill(Math.max(1,Math.floor(room/count)));
+      twips[twips.length-1]+=room-twips.reduce((a,b)=>a+b,0);
+    }else{
+      const boundaries=[0,rect.width];
+      rows.forEach(row=>{for(const cell of row.cells){const cellRect=cell.getBoundingClientRect();boundaries.push(cellRect.left-rect.left,cellRect.right-rect.left);}});
+      const stops=boundaries.sort((a,b)=>a-b).filter((x,i,a)=>!i||x-a[i-1]>2);
+      const widths=stops.length===count+1?stops.slice(1).map((x,i)=>(x-stops[i])/Math.max(1,rect.width)*width):Array(count).fill(width/count);
+      twips=widths.map(n=>Math.max(1,Math.round(n/635)));
+      let sum=twips.reduce((a,b)=>a+b,0);
+      if(sum!==room&&sum>0) twips=twips.map(n=>Math.max(1,Math.round(n*room/sum)));
+      twips[twips.length-1]+=room-twips.reduce((a,b)=>a+b,0);
+      const min=800;
+      for(let i=0;i<twips.length;i++){
+        if(twips[i]>=min) continue;
+        let need=min-twips[i];
+        for(let j=0;j<twips.length&&need>0;j++){
+          if(j===i||twips[j]<=min) continue;
+          const take=Math.min(need,twips[j]-min);
+          twips[j]-=take;twips[i]+=take;need-=take;
+        }
+      }
+    }
+    const total=twips.reduce((a,b)=>a+b,0);
+    let xml=`<w:tbl><w:tblPr><w:tblW w:w="${isOptions?5000:total}" w:type="${isOptions?'pct':'dxa'}"/><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="${isOptions?20:45}" w:type="dxa"/><w:left w:w="${isOptions?0:60}" w:type="dxa"/><w:bottom w:w="${isOptions?20:45}" w:type="dxa"/><w:right w:w="${isOptions?0:60}" w:type="dxa"/></w:tblCellMar>${isOptions?'<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>':''}</w:tblPr><w:tblGrid>${twips.map(n=>`<w:gridCol w:w="${n}"/>`).join('')}</w:tblGrid>`;
+    for(const row of grid){
+      xml+='<w:tr>';
+      for(let c=0;c<count;){
+        const slot=row[c];if(!slot){xml+='<w:tc><w:tcPr/><w:p/></w:tc>';c++;continue;}
+        const {cell,span,continued,rs}=slot,s=getCS(cell);
+        const cw=twips.slice(c,c+span).reduce((a,b)=>a+b,0);
+        const borders=isOptions?'<w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/>':['top','left','bottom','right'].map(side=>{const prefix='border'+side[0].toUpperCase()+side.slice(1);return `<w:${side} w:val="${parseFloat(s[prefix+'Width'])>0&&s[prefix+'Style']!=='none'?'single':'nil'}" w:sz="4" w:color="${color(s[prefix+'Color'])}"/>`;}).join('');
+        let contents=continued?[]:await blocks(cell,Math.max(635,(cw-(isOptions?0:120))*635));
+        if(!contents.length||!contents[contents.length-1].endsWith('</w:p>'))contents.push('<w:p/>');
+        xml+=`<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/>${span>1?`<w:gridSpan w:val="${span}"/>`:''}${rs>1?`<w:vMerge${continued?'':' w:val="restart"'}/>`:''}<w:tcBorders>${borders}</w:tcBorders><w:vAlign w:val="${s.verticalAlign==='middle'?'center':s.verticalAlign==='bottom'?'bottom':'top'}"/></w:tcPr>${contents.join('')}</w:tc>`;
+        c+=span;
+      }
+      xml+='</w:tr>';
+    }
+    return xml+'</w:tbl>';
+  };
+  return blocks(root,maxWidth);
+}
+
+/* ---------- 图片内联：改走 /api/img 同源代理（替代原直接 fetch） ---------- */
+function imageDataURL(src, base, cache) {
+  if(/^data:/i.test(src)) return Promise.resolve(src);
+  const url=new URL(src,base).href;
+  if(!cache.has(url)) cache.set(url,(async()=>{
+    let response;
+    try { response=await fetch('/api/img?url='+encodeURIComponent(url),{cache:'no-store'}); }
+    catch(error) { throw new Error(`图片读取失败（${new URL(url).pathname}）：${error.message}`); }
+    if(!response.ok) throw new Error(`图片读取失败（${response.status}）：${new URL(url).pathname}`);
+    return toDataURL(await response.blob());
+  })());
+  return cache.get(url);
+}
+async function inlineImages(node, base, cache) {
+  const images=[...node.querySelectorAll('img')];
+  for(const img of images) {
+    const src=img.currentSrc||img.getAttribute('src');
+    if(!src) continue;
+    img.removeAttribute('srcset');img.removeAttribute('loading');
+    img.src=await imageDataURL(src, base, cache);
+  }
+  await Promise.all(images.map(img=>img.decode?img.decode().catch(()=>{}):Promise.resolve()));
+}
+
+/* ---------- 题目采集（原样移植，source 改为参数） ---------- */
+function collect(source, includeAnswers=false) {
+  const out=[];let section='';
+  const addQuestion=(q,content,answer)=>{
+    if(!content) return;
+    if(includeAnswers && (!answer || !answer.getAttribute('src'))) throw new Error(`第 ${out.length+1} 题没有可导出的答案解析。请确认 Cookie 已登录，并在网页打开"显示全部答案和解析"后再试。`);
+    out.push({section,id:q.getAttribute('questionid'),content,answer});
+  };
+  const detailGroups=[...source.querySelectorAll('.exam-list > .sec-item')];
+  if(detailGroups.length) {
+    for(const group of detailGroups) for(const child of group.children) {
+      if(child.matches('.sec-title')) section=child.querySelector('span')?.textContent.trim()||child.textContent.trim();
+      if(child.matches('.sec-list')) for(const q of child.querySelectorAll(':scope > .tk-quest-item')) {
+        addQuestion(q,q.querySelector(':scope > .quesdiv > .exam-item__cnt'),q.querySelector(':scope > .quesdiv > .exam-item__opt > .item.answer > img'));
+      }
+    }
+  } else if(source.matches('article.paper-cnt')) {
+    for(const group of source.querySelectorAll('.paper-body .ques-type')) {
+      section=group.querySelector(':scope > .questype-head .questypetitle')?.textContent.trim()||'';
+      for(const q of group.querySelectorAll(':scope > .questype-body > .ques-item')) {
+        addQuestion(q,q.querySelector(':scope > .quesroot > .quesdiv > .exam-item__cnt'),q.querySelector(':scope > .quesroot > .quesdiv > .exam-item__opt > .item.answer > img'));
+      }
+    }
+  }
+  if(!out.length) throw new Error('页面里没有找到可导出的题目，请确认这是试卷详情页且已登录。');
+  return out;
+}
+
+/* ---------- Word 导出（移植 docx()，target 文档改为 iframe 文档） ---------- */
+async function buildDocx(frameDoc, source, base, hybrid, onProgress) {
+  if(typeof html2canvas!=='function') throw new Error('渲染组件 html2canvas 未载入，请检查网络后刷新。');
+  const questions=collect(source,false);
+  const paperTitle=source.querySelector('#pui_maintitle')?.textContent.trim()||frameDoc.title.replace(/-组卷网\s*$/,'');
+  const host=frameDoc.createElement('div');
+  host.className='exam-cnt';
+  host.style.cssText='position:fixed;left:-12000px;top:0;z-index:0;pointer-events:none;width:820px;background:#fff;padding:0';
+  frameDoc.body.appendChild(host);
+  const cache=new Map(), files=[], media=[], body=[];
+  const registerImage=(data,extension='png')=>{
+    const id=media.length+1,name='inline-'+id+'.'+extension;
+    media.push({id,name});files.push({name:'word/media/'+name,data});return id;
+  };
+  const maxW=6.8*914400,maxH=9.4*914400;
+  const addImage=(name,data,width,height,label)=>{
+    const id=media.length+1,ratio=Math.min(maxW/width,maxH/height);
+    media.push({id,name});
+    files.push({name:`word/media/${name}`,data});
+    body.push(imagePara(id,Math.round(width*ratio),Math.round(height*ratio),label));
+  };
+  const addCanvas=(canvas,number)=>{
+    const maxSlice=Math.floor(canvas.width*maxH/maxW);
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    let top=0,part=1;
+    while(top<canvas.height){
+      let bottom=Math.min(top+maxSlice,canvas.height);
+      if(bottom<canvas.height){
+        const from=Math.max(top+Math.floor(maxSlice*0.65),bottom-130);
+        const to=Math.min(canvas.height-1,bottom+130);
+        const band=ctx.getImageData(0,from,canvas.width,to-from+1).data;
+        let best=bottom,least=Infinity;
+        for(let y=from;y<=to;y+=2){
+          let dark=0;
+          for(let x=0;x<canvas.width;x+=6){
+            const i=((y-from)*canvas.width+x)*4;
+            if(band[i]<235||band[i+1]<235||band[i+2]<235) dark++;
+          }
+          const score=dark+Math.abs(y-bottom)/100;
+          if(score<least){least=score;best=y;}
+        }
+        bottom=best;
+      }
+      const height=bottom-top;
+      const tile=frameDoc.createElement('canvas');tile.width=canvas.width;tile.height=height;
+      tile.getContext('2d').drawImage(canvas,0,top,canvas.width,height,0,0,canvas.width,height);
+      addImage(`question-${number}-${part}.png`,dataBytes(tile.toDataURL('image/png')),tile.width,tile.height,`第${number}题第${part}部分`);
+      top=bottom;part++;
+    }
+  };
+  let lastSection='',lastPart=null;
+  const centerPaper=source.matches('article.paper-cnt');
+  const shown=node=>!!node && !node.closest('[hidden]') && node.getClientRects().length>0 && frameDoc.defaultView.getComputedStyle(node).visibility!=='hidden';
+  const visibleText=selector=>{const node=source.querySelector(selector);return shown(node)?node.textContent.trim():'';};
+  try {
+    await frameDoc.fonts.ready;
+    if(centerPaper){
+      const mark=visibleText('#pui_marktag');
+      if(mark) body.push(para(mark,20,false,'right'));
+    }
+    body.push(para(paperTitle,30,true,centerPaper?'center':''));
+    if(centerPaper){
+      const subtitle=visibleText('#pui_subtitle'),testInfo=visibleText('#pui_testinfo');
+      if(subtitle) body.push(para(subtitle,24,false,'center'));
+      if(testInfo) body.push(para(testInfo,22,false,'center'));
+      const student=visibleText('#pui_studentinput');
+      if(student) body.push(para(student,20));
+      const score=source.querySelector('#pui_score');
+      if(shown(score)) for(const row of score.querySelectorAll('tr')){
+        const cells=[...row.children].map(cell=>cell.textContent.trim()).filter(Boolean);
+        if(cells.length) body.push(para(cells.join('　'),20));
+      }
+      const notice=source.querySelector('#pui_notice');
+      if(shown(notice)){
+        const tip=notice.querySelector('.notice-tip'),note=notice.querySelector('#pui_noticetext');
+        if(shown(tip) && tip.textContent.trim()) body.push(para(tip.textContent.trim(),20));
+        if(shown(note)) body.push(...editableContent(note));
+      }
+    }
+    for(let i=0;i<questions.length;i++) {
+      const q=questions[i];
+      if(centerPaper){
+        const part=q.content.closest('.paper-part');
+        if(part && part!==lastPart){
+          const heading=part.querySelector(':scope > .part-head > .part-head-box');
+          const name=heading?.querySelector('.part-name'),note=heading?.querySelector('.part-note');
+          if(shown(name) && name.textContent.trim()) body.push(para(name.textContent.trim(),25,true,'center'));
+          if(shown(note) && note.textContent.trim()) body.push(...editableContent(note));
+          lastPart=part;
+          lastSection='';
+        }
+      }
+      if(q.section!==lastSection){body.push(para(q.section,25,true));lastSection=q.section;}
+      onProgress(i/questions.length, `正在生成 Word：第 ${i+1}/${questions.length} 题`);
+
+      host.innerHTML='';
+      const wrap=frameDoc.createElement('div');wrap.className='sec-list';
+      const item=frameDoc.createElement('div');item.className='tk-quest-item quesroot';
+      const question=frameDoc.createElement('div');question.className='wrapper quesdiv';
+      const content=q.content.cloneNode(true);content.style.cssText+=';width:780px!important;max-width:780px!important;box-sizing:border-box!important;overflow:visible!important;background:#fff!important;color:#111!important';
+      question.appendChild(content);item.appendChild(question);wrap.appendChild(item);host.appendChild(wrap);
+      const originalCanvases=[...q.content.querySelectorAll('canvas')];
+      [...content.querySelectorAll('canvas')].forEach((c,j)=>{c.width=originalCanvases[j].width;c.height=originalCanvases[j].height;c.getContext('2d').drawImage(originalCanvases[j],0,0);});
+      await inlineImages(content, base, cache);
+      if(hybrid){
+        const parts=await hybridContent(content,registerImage,maxW);
+        if(!parts.length) throw new Error('第 '+(i+1)+' 题未生成内容。');
+        body.push('<w:sdt><w:sdtPr><w:alias w:val="第'+(i+1)+'题"/><w:tag w:val="question-'+esc(q.id||i+1)+'"/><w:id w:val="'+(10000+i)+'"/></w:sdtPr><w:sdtContent>'+parts.join('')+'</w:sdtContent></w:sdt>');
+        body.push(para(''));
+        continue;
+      }
+      const canvas=await html2canvas(content,{backgroundColor:'#ffffff',scale:2.5,useCORS:true,allowTaint:false,logging:false,scrollX:0,scrollY:0,windowWidth:1000});
+      if(!canvas.width||!canvas.height) throw new Error(`第 ${i+1} 题生成了空白图片。`);
+      addCanvas(canvas,i+1);
+      body.push('<w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>');
+    }
+    body.push('<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="850" w:bottom="900" w:left="850" w:header="450" w:footer="450" w:gutter="0"/></w:sectPr>');
+    const doc=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body.join('')}</w:body></w:document>`;
+    const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${media.map(m=>`<Relationship Id="rId${m.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${m.name}"/>`).join('')}</Relationships>`;
+    files.unshift({name:'[Content_Types].xml',data:u8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')},{name:'_rels/.rels',data:u8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')},{name:'word/document.xml',data:u8(doc)},{name:'word/_rels/document.xml.rels',data:u8(rels)});
+    return { blob: zip(files), title: paperTitle, count: questions.length };
+  } finally { host.remove(); }
+}
+
+/* ---------- PDF 导出（替代原 window.print 方案：html2canvas 切片 + jsPDF） ---------- */
+async function buildPdf(frameDoc, source, base, includeAnswers, onProgress) {
+  if(typeof html2canvas!=='function') throw new Error('渲染组件 html2canvas 未载入，请检查网络后刷新。');
+  if(!window.jspdf?.jsPDF) throw new Error('PDF 组件 jsPDF 未载入，请检查网络后刷新。');
+  const questions=collect(source, includeAnswers);
+  const paperTitle=source.querySelector('#pui_maintitle')?.textContent.trim()||frameDoc.title.replace(/-组卷网\s*$/,'');
+  const host=frameDoc.createElement('div');
+  host.style.cssText='position:fixed;left:-12000px;top:0;z-index:0;width:794px;background:#fff;padding:24px 28px;box-sizing:border-box;color:#111';
+  frameDoc.body.appendChild(host);
+  const cache=new Map();
+  try{
+    const h=frameDoc.createElement('h1');
+    h.style.cssText='font-size:20px;text-align:center;margin:0 0 16px;font-family:inherit';
+    h.textContent=paperTitle;host.appendChild(h);
+    for(let i=0;i<questions.length;i++){
+      onProgress(i/questions.length,`正在渲染 PDF：第 ${i+1}/${questions.length} 题`);
+      const box=frameDoc.createElement('div');
+      box.style.cssText='margin-bottom:14px;overflow:visible';
+      const content=questions[i].content.cloneNode(true);
+      content.querySelectorAll('script,iframe,.ques-ctrl,.btn-box,.ctrl-box,.exam-item__info,.top-msg,.msg-box,.info-list,section.exam-analyze,.add-sec-ques,[class*="download"],[class*="collect"],[class*="share"]').forEach(n=>n.remove());
+      if(!includeAnswers) content.querySelectorAll('.exam-item__opt > .item.answer,.exam-item__opt > .item.no-login').forEach(n=>n.remove());
+      box.appendChild(content);
+      if(includeAnswers && questions[i].answer){
+        const ans=frameDoc.createElement('div');
+        ans.style.cssText='margin-top:6px';
+        const label=frameDoc.createElement('div');label.textContent='【解析】';label.style.cssText='font-weight:bold;font-size:13px;margin-bottom:4px';
+        const img=frameDoc.createElement('img');img.src=questions[i].answer.getAttribute('src');img.style.maxWidth='100%';
+        ans.appendChild(label);ans.appendChild(img);box.appendChild(ans);
+      }
+      host.appendChild(box);
+    }
+    await inlineImages(host, base, cache);
+    const canvas=await html2canvas(host,{backgroundColor:'#ffffff',scale:2,useCORS:true,allowTaint:false,logging:false,windowWidth:900});
+    onProgress(0.95,'正在合成 PDF 文件…');
+    const pdf=new window.jspdf.jsPDF({unit:'mm',format:'a4',orientation:'portrait'});
+    const pageW=210,pageH=297,margin=10;
+    const contentW=pageW-margin*2;
+    const pxPerMm=canvas.width/contentW;
+    const sliceH=Math.floor((pageH-margin*2)*pxPerMm);
+    let top=0,first=true;
+    while(top<canvas.height){
+      const h2=Math.min(sliceH,canvas.height-top);
+      const tile=frameDoc.createElement('canvas');tile.width=canvas.width;tile.height=h2;
+      const ctx=tile.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,tile.width,tile.height);
+      ctx.drawImage(canvas,0,top,canvas.width,h2,0,0,canvas.width,h2);
+      if(!first) pdf.addPage();
+      pdf.addImage(tile.toDataURL('image/jpeg',0.92),'JPEG',margin,margin,contentW,h2/pxPerMm);
+      top+=h2;first=false;
+    }
+    return { blob: pdf.output('blob'), title: paperTitle, count: questions.length };
+  } finally { host.remove(); }
+}
+
+/* ---------- 页面抓取：/api/paper 取回 HTML → 隐藏 iframe 渲染 ---------- */
+const ROOTS=['article.exam-cnt','article.paper-cnt','div.qml_paper.ques-list','div.qml_paper','section#quesListBox','.ques-list'];
+let frame=null;
+function getFrame(){
+  if(frame) return frame;
+  frame=document.createElement('iframe');
+  frame.style.cssText='position:fixed;left:-12000px;top:0;width:1000px;height:800px;border:0;visibility:hidden';
+  frame.setAttribute('sandbox','allow-same-origin');
+  document.body.appendChild(frame);
+  return frame;
+}
+async function loadPaper(url){
+  let res;
+  try{ res=await fetch('/api/paper?url='+encodeURIComponent(url),{signal:AbortSignal.timeout(30000)}); }
+  catch(e){ throw new Error(e.name==='TimeoutError'?'请求超时：抓取服务 30 秒未响应，请稍后重试。':'网络错误：'+e.message); }
+  const data=await res.json().catch(()=>({error:'服务响应格式异常'}));
+  if(!res.ok) throw new Error(data.error||`抓取失败（${res.status}）`);
+  const f=getFrame();
+  await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(new Error('页面渲染超时')),15000);
+    f.onload=()=>{clearTimeout(timer);resolve();};
+    f.srcdoc=data.html;
+  });
+  const doc=f.contentDocument;
+  // 图片统一改走代理，避免跨域/防盗链
+  const cache=new Map();
+  await inlineImages(doc.documentElement, data.base, cache);
+  const source=ROOTS.map(s=>doc.querySelector(s)).find(Boolean);
+  if(!source) throw new Error('页面里没有找到试卷正文，请确认这是试卷详情页地址。');
+  return { frameDoc:doc, source, base:data.base };
+}
+
+/* ---------- 主流程 ---------- */
+const goBtn=$('#go'), resultBox=$('#result');
+document.querySelectorAll('.fmt input').forEach(r=>r.addEventListener('change',()=>{
+  document.querySelectorAll('.fmt').forEach(l=>l.classList.toggle('on',l.querySelector('input').checked));
+  const pdf=$('input[name=fmt]:checked').value==='pdf';
+  $('#answers').disabled=!pdf;
+  if(!pdf) $('#answers').checked=false;
+}));
+function fileName(sourceUrl,title,ext){
+  let domain='page'; try{ domain=new URL(sourceUrl).hostname; }catch{}
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const date=`${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}`;
+  const safe=(title||'试卷').replace(/[\\/:*?"<>|]/g,'_').slice(0,60);
+  return `${domain}_${date}_${safe}.${ext}`;
+}
+async function uploadToCloud(blob, filename, format, sourceUrl){
+  const res=await fetch('/api/files',{method:'POST',body:blob,headers:{
+    'x-filename':filename,'x-format':format,'x-source-url':sourceUrl,
+    'Content-Type':'application/octet-stream'}});
+  if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.error||'云端存档失败'); }
+  return res.json();
+}
+goBtn.addEventListener('click',async()=>{
+  const url=$('#url').value.trim();
+  const fmt=document.querySelector('input[name=fmt]:checked').value;
+  const includeAnswers=$('#answers').checked && fmt==='pdf';
+  resultBox.classList.remove('show');
+  let parsed;
+  try{ parsed=new URL(url); if(!/^https?:$/.test(parsed.protocol)) throw 0; }
+  catch{ status('请输入完整的试卷网址（以 http:// 或 https:// 开头）。','err'); return; }
+  if(!/\/[^/]*\d+\.html$/.test(parsed.pathname))
+    status('提示：该地址不像试卷详情页（…/数字.html），仍将尝试抓取。','info');
+
+  goBtn.disabled=true;goBtn.textContent='处理中…';
+  try{
+    status('正在抓取试卷页面…');progress(0.05);
+    const {frameDoc,source,base}=await loadPaper(url);
+    status('页面渲染完成，开始解析题目…');progress(0.15);
+    const onProgress=(p,msg)=>{progress(0.15+p*0.7);if(msg)status(msg);};
+    const built= fmt==='pdf'
+      ? await buildPdf(frameDoc,source,base,includeAnswers,onProgress)
+      : await buildDocx(frameDoc,source,base,fmt==='docx-hybrid',onProgress);
+    const ext=fmt==='pdf'?'pdf':'docx';
+    const name=fileName(url,built.title,ext);
+    progress(0.88);status('正在上传到云端存储…');
+    let cloudUrl='';
+    try{
+      const saved=await uploadToCloud(built.blob,name,ext,url);
+      cloudUrl=saved.url;
+    }catch(e){
+      console.warn('云端存档失败（不影响本地下载）',e);
+    }
+    const localUrl=URL.createObjectURL(built.blob);
+    $('#dlLocal').href=localUrl;$('#dlLocal').download=name;
+    if(cloudUrl){ $('#dlCloud').href=cloudUrl; $('#dlCloud').style.display=''; }
+    else $('#dlCloud').style.display='none';
+    resultBox.classList.add('show');
+    progress(1);
+    status(`完成：${built.count} 道题已导出为 ${name}，点击上方按钮下载。`,'ok');
+    loadHistory();
+  }catch(e){
+    console.error(e);
+    status((e?.message||String(e)),'err');
+  }finally{
+    goBtn.disabled=false;goBtn.textContent='生成并下载';
+    setTimeout(clearProgress,600);
+  }
+});
+
+/* ---------- 导出记录（KV 索引） ---------- */
+async function loadHistory(){
+  const ul=$('#hist');
+  try{
+    const res=await fetch('/api/files');
+    const data=await res.json();
+    if(!data.files?.length){ ul.innerHTML='<li class="empty">暂无导出记录</li>'; return; }
+    ul.innerHTML=data.files.slice(0,20).map(f=>{
+      const href='/api/file/'+String(f.key).split('/').map(encodeURIComponent).join('/');
+      const size=f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.round(f.size/1024)+' KB';
+      const time=(f.createdAt||'').slice(0,16).replace('T',' ');
+      return `<li><a href="${href}">${esc(f.filename)}</a><span class="meta">${size} · ${time}</span></li>`;
+    }).join('');
+  }catch{ ul.innerHTML='<li class="empty">记录加载失败（服务端可能未配置 KV）</li>'; }
+}
+loadHistory();
+</script>
+</body>
+</html>

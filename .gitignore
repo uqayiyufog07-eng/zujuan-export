@@ -1,0 +1,18 @@
+# 依赖 / 构建产物
+node_modules/
+.wrangler/
+dist/
+
+# 本地密钥（不要提交 Cookie）
+.dev.vars
+.env
+.env.*
+
+# 本地工作区数据
+.workbuddy/
+
+# 临时文件
+._check.js
+*.log
+.DS_Store
+Thumbs.db
