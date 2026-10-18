@@ -3,7 +3,8 @@
 //   1) Cloudflare Workers 直连（对未被 WAF 封禁的站点有效）
 //   2) SOCKS5/HTTP 代理出口（PROXY_URL，参考 edgetunnel 反代 IP 方案：
 //      connect() 原始 TCP + SOCKS5 握手 + startTls，出口 IP 换成代理 IP）
-//   3) 本地抓取器（FETCHER_URL + FETCH_KEY，经 Cloudflare Tunnel 暴露你电脑的出口）
+//   3) 通用 HTTP 反代（REVERSE_PROXY_URL，nginx/VPS 反代、第三方中转站）
+//   4) 本地抓取器（FETCHER_URL + FETCH_KEY，经 Cloudflare Tunnel 暴露你电脑的出口）
 // 背景：zujuan.xkw.com 的阿里云 WAF 会 405 封禁 Cloudflare/Azure 等机房 IP，
 //       只有住宅/代理出口能访问；图片域名 staticzujuan.xkw.com 则可被 CF 直连。
 //
@@ -81,7 +82,27 @@ async function handle({ request, env }) {
     }
   }
 
-  // ---- 通道 3：本地抓取器（Cloudflare Tunnel）----
+  // ---- 通道 3：通用 HTTP 反代（REVERSE_PROXY_URL，nginx/VPS 反代、第三方中转站）----
+  // 支持 {url}（原样）/ {urlenc}（编码）占位符；不含占位符时按 ?url=<编码> 拼接
+  if (env.REVERSE_PROXY_URL) {
+    try {
+      const base = env.REVERSE_PROXY_URL.trim();
+      const rpUrl = base.includes('{url}')
+        ? base.replace(/\{urlenc\}/g, encodeURIComponent(page.href)).replace(/\{url\}/g, page.href)
+        : base.replace(/\/$/, '') + '?url=' + encodeURIComponent(page.href);
+      const res = await fetch(rpUrl, {
+        headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(25000),
+      });
+      if (res.ok) return passThrough(res.body, page.href, 'reverse-proxy');
+      errors.push(`HTTP 反代返回 ${res.status}`);
+    } catch (e) {
+      errors.push(`HTTP 反代失败（${e.name === 'TimeoutError' ? '超时' : e.message}）`);
+    }
+  }
+
+  // ---- 通道 4：本地抓取器（Cloudflare Tunnel）----
   if (env.FETCHER_URL) {
     try {
       const fHeaders = { 'User-Agent': UA };
@@ -98,7 +119,7 @@ async function handle({ request, env }) {
   }
 
   return json({
-    error: `${errors.join('；')}。组卷网主站封禁 Cloudflare 机房 IP，请配置 PROXY_URL（SOCKS5 代理）或保持本机抓取器 + Cloudflare Tunnel 运行，详见 README「机房 IP 被封」一节。`,
+    error: `${errors.join('；')}。组卷网主站封禁 Cloudflare 机房 IP，请配置 PROXY_URL（SOCKS5/HTTP 代理或 edgetunnel 反代 IP，格式 tcp://host:port）、REVERSE_PROXY_URL（通用 HTTP 反代）或 FETCHER_URL（本机抓取器），详见 README「机房 IP 被封」一节。`,
   }, 502);
 }
 

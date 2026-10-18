@@ -89,66 +89,101 @@ push 到 `main` 即触发部署，也可在 Actions 页手动 `Run workflow`。�
 | --- | --- | --- |
 | `服务响应格式异常` | 页面不在部署环境打开，或 CDN 边缘缓存 | 用 https://zujuan-export.pages.dev 打开；强刷（Ctrl+F5） |
 | `服务响应格式异常（HTTP 502 · text/html）` | Cloudflare 边缘瞬时故障（502 HTML 错误页），或旧版 Function 正则超 CPU 被终止 | 前端已内置自动重试 3 次；重试仍失败请更换网络/代理环境；确认已部署最新版（2026-10-18 修复） |
-| `目标站点返回 405` | CF 机房 IP 被 WAF 封 | 配置 `PROXY_URL`（SOCKS5 代理出口）或保持本机抓取器 + Cloudflare Tunnel 运行 |
+| `目标站点返回 405` | CF 机房 IP 被 WAF 封 | 配置 `PROXY_URL`（SOCKS5/HTTP 代理，无需开电脑）或 `REVERSE_PROXY_URL`（通用反代）；电脑常开也可用本机抓取器 `FETCHER_URL`。edgetunnel 反代 IP 无效（出口还是 CF） |
 | `没有找到试卷正文` | 地址不是试卷详情页 | 换 `…/数字.html` 形式的地址 |
 | `没有可导出的答案解析` | Cookie 失效 | 重新复制组卷网 Cookie → `wrangler pages secret put ZUJUAN_COOKIE` → 重新部署 |
 
-## 机房 IP 被封：本机抓取器方案
+## 机房 IP 被封：反代 / 代理出口方案
 
-组卷网主站的阿里云 WAF 封禁所有云厂商机房 IP（Cloudflare / Azure / GCP 出口均返回 405），仅住宅/代理出口可访问。免费公网 SOCKS5 实测 14 个全部不可用。**本机抓取器 + Cloudflare Tunnel** 是 100% 可行的方案：抓取器跑在你电脑上（走你家/Clash 出口），经 Cloudflare Tunnel 暴露，Pages Function 直连被拒时自动改走它。
+组卷网主站的阿里云 WAF 封禁所有云厂商机房 IP（Cloudflare / Azure / GCP 出口均返回 405），仅住宅/代理出口可访问。图片域名 `staticzujuan.xkw.com` 不被封禁，`/api/img` 走 Cloudflare 直连即可。
 
-### 快速开始（Quick Tunnel，零配置）
+Function 按顺序尝试四个通道，任一成功即返回：
+
+| # | 通道 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| 1 | Workers 直连 | — | 对未被封禁的站点有效（如 example.com） |
+| 2 | SOCKS5 / HTTP 代理 | `PROXY_URL` | Worker 内经 `cloudflare:sockets` 手写握手，出口 IP = 代理 IP |
+| 3 | 通用 HTTP 反代 | `REVERSE_PROXY_URL` | nginx/VPS 反代、第三方中转站 |
+| 4 | 本机抓取器 | `FETCHER_URL` + `FETCH_KEY` | 需电脑开机，见下文 |
+
+### 方案 A：SOCKS5 / HTTP 代理（推荐，无需开电脑）
+
+`PROXY_URL` 支持四种格式：
+
+```
+socks5://host:port                  # SOCKS5 无认证
+socks5://user:pass@host:port        # SOCKS5 带认证
+http://user:pass@host:port          # HTTP CONNECT 代理
+https://user:pass@host:port         # HTTPS 代理
+tcp://host:port                     # 裸 TCP 中继（edgetunnel 反代 IP 格式）
+```
+
+配置（生产环境，重启部署后生效）：
 
 ```bash
-# 1. 确保 fetcher/.env 存在（含 ZUJUAN_COOKIE 与 FETCH_KEY）
+npx wrangler@4.47.0 pages secret put PROXY_URL --project-name zujuan-export
+```
+
+本地开发：把 `PROXY_URL=socks5://127.0.0.1:7891` 写进 `.dev.vars`（即走本机 Clash 的 SOCKS5 出口，需 Clash 运行中），`wrangler pages dev public` 后导出流程与本机 Clash 出口完全一致——**买代理前可先用它验证整条链路**。
+
+> 实测结论（2026-10-18）：
+> - **edgetunnel 的「反代 IP」（如 `proxyip.cmliussss.net:443`）对本项目无效**：它们是 Cloudflare Worker 中继，出口依然是 CF 机房 IP，照样 405；且只接受 VLESS 首包、不支持 HTTP CONNECT。
+> - 免费公网 SOCKS5 累计实测 20 个全部不可用，不要浪费时间。
+> - 可用的是**住宅/代理出口**：付费 SOCKS5（按量付费几块钱即可）、或非 CF 机房的 VPS 自建。
+> -  socks5 通道已端到端验证通过：Worker → SOCKS5 → zujuan.xkw.com → 200 真实试卷 HTML。
+
+### 方案 B：通用 HTTP 反代（有 nginx / 中转站时）
+
+```bash
+npx wrangler@4.47.0 pages secret put REVERSE_PROXY_URL --project-name zujuan-export
+```
+
+拼接规则：含 `{url}` / `{urlenc}` 占位符时替换（`{url}` 原样、`{urlenc}` 编码）；否则按 `?url=<编码后完整地址>` 拼接。例如 `https://your-proxy.example.com/` 会请求 `https://your-proxy.example.com/?url=https%3A%2F%2Fzujuan.xkw.com%2F11p3514663.html`。
+
+### 方案 C：本机抓取器（电脑开机时才可用）
+
+抓取器跑在你电脑上（走你家/Clash 出口），经 Cloudflare Tunnel 暴露给 Function。适合临时/本地验证，**电脑关机即失效**。
+
+```bash
 cd fetcher
-start.bat          # 双击也行：自动启动抓取器 + 临时隧道
-
-# 2. 日志里会出现 https://xxxx-xxxx-xxxx.trycloudflare.com，复制它
-# 3. 把该地址配到 Pages（地址重启后会变，变了要重新配）：
-npx wrangler@4.47.0 pages secret put FETCHER_URL --project-name zujuan-export
-#    粘贴 https://xxxx-xxxx-xxxx.trycloudflare.com
+start.bat          # 双击也行：自动启动抓取器 + 临时隧道（Quick Tunnel）
 ```
 
-之后网页端抓取会自动走：CF 直连（405）→ 本机抓取器（成功）。
+- **Quick Tunnel（零配置）**：日志里出现 `https://xxxx.trycloudflare.com`，配到 Pages：
+  ```bash
+  npx wrangler@4.47.0 pages secret put FETCHER_URL --project-name zujuan-export
+  ```
+  地址每次重启都会变，变了要重新配。
+- **命名隧道（永久地址）**：一次性准备后地址固定为 `https://fetch.laoqian303.top`：
+  ```bash
+  cloudflared tunnel login                                  # 浏览器授权 laoqian303.top
+  cloudflared tunnel create zujuan-fetch
+  cloudflared tunnel route dns zujuan-fetch fetch.laoqian303.top
+  # fetcher/cloudflared-config.yml 已就绪，之后 start.bat 会自动走命名隧道
+  ```
 
-### 命名隧道（永久地址，推荐长期使用）
-
-需要一次性准备（域名 `laoqian303.top` 已在 Cloudflare）：
-
-```bash
-# 1. 授权（会打开浏览器，选 laoqian303.top 域名）
-cloudflared tunnel login
-
-# 2. 创建隧道
-cloudflared tunnel create zujuan-fetch
-
-# 3. 配置 DNS（把 fetch.laoqian303.top 指向隧道）
-cloudflared tunnel route dns zujuan-fetch fetch.laoqian303.top
-
-# 4. fetcher/cloudflared-config.yml 已就绪，直接跑：
-cd fetcher && start.bat
-
-# 5. Pages 变量（永久有效，只需配一次）：
-npx wrangler@4.47.0 pages secret put FETCHER_URL --project-name zujuan-export
-#    粘贴 https://fetch.laoqian303.top
-```
-
-### 验证
+验证：
 
 ```bash
-# 抓取器本体（应返回 pong）
-curl http://127.0.0.1:8788/ping
-
-# 经隧道（把 URL 换成你的隧道地址）
+curl http://127.0.0.1:8788/ping                                          # 抓取器本体（pong）
 curl -H "x-fetch-key: 你的FETCH_KEY" "https://你的隧道地址/fetch?url=https%3A%2F%2Fzujuan.xkw.com%2F11p3514663.html" | head -c 200
 ```
 
-### 说明
+诊断工具（线上可直接调用）：
 
-- `FETCH_KEY` 是抓取器的访问密钥，防止公网滥用，必须与 `.env` 中的值一致
+```bash
+# 各通道分别尝试，返回各自状态码/长度/标题
+curl "https://zujuan-export.pages.dev/api/diag?url=https%3A%2F%2Fzujuan.xkw.com%2F11p3514663.html&proxy=socks5%3A%2F%2Fhost%3Aport"
+
+# socket API 探针（connect/startTls/写入锁状态，排查代理通道用）
+curl "https://zujuan-export.pages.dev/api/socketprobe?host=proxy-host&port=1080&flow=socks5&target=zujuan.xkw.com:443"
+```
+
+说明：
+
+- `FETCH_KEY` 是抓取器的访问密钥，必须与 `.env` 中的值一致
 - 抓取器只在你的电脑开机运行时可用，不用时关闭即可（不影响已生成的下载链接）
-- 图片域名 `staticzujuan.xkw.com` 不被 WAF 封禁，`/api/img` 走 Cloudflare 直连即可，不消耗抓取器
+- 改 `PROXY_URL` / `REVERSE_PROXY_URL` / `FETCHER_URL` 后需要**重新部署**才生效
 
 ## 说明与限制
 

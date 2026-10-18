@@ -10,6 +10,9 @@
 //   socks5://user:pass@host:port
 //   http://host:port            （HTTP CONNECT，明文代理）
 //   https://user:pass@host:port （HTTPS 代理，TLS 直连）
+//   tcp://host:port             （edgetunnel 反代 IP：裸 TCP 中继，按 SNI 转发，
+//                                等价 edgetunnel 的 proxyip=host:port，默认端口 443）
+//   relay:// / proxyip://       同 tcp://
 
 import { connect } from 'cloudflare:sockets';
 
@@ -18,11 +21,15 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 export function parseProxy(proxyUrl) {
   const u = new URL(proxyUrl);
   const scheme = u.protocol.replace(':', '');
-  if (!['socks5', 'socks5h', 'http', 'https'].includes(scheme)) throw new Error('不支持的代理协议（仅 socks5/http/https）');
+  const isSocks = scheme === 'socks5' || scheme === 'socks5h';
+  const isRelay = scheme === 'tcp' || scheme === 'relay' || scheme === 'proxyip';
+  if (!isSocks && !isRelay && !['http', 'https'].includes(scheme)) {
+    throw new Error('不支持的代理协议（仅 socks5/http/https/tcp）');
+  }
   return {
-    scheme: scheme.startsWith('socks5') ? 'socks5' : scheme,
+    scheme: isSocks ? 'socks5' : isRelay ? 'relay' : scheme,
     hostname: u.hostname,
-    port: Number(u.port) || (scheme === 'https' ? 443 : 1080),
+    port: Number(u.port) || (isSocks ? 1080 : scheme === 'http' ? 80 : 443),
     username: decodeURIComponent(u.username || ''),
     password: decodeURIComponent(u.password || ''),
   };
@@ -63,7 +70,8 @@ function indexOfCRLFCRLF(b) {
 
 async function socks5Handshake(socket, proxy, targetHost, targetPort) {
   const writer = socket.writable.getWriter();
-  const br = new BufReader(socket.readable.getReader());
+  const reader = socket.readable.getReader();
+  const br = new BufReader(reader);
   const enc = new TextEncoder();
   try {
     const greet = proxy.username && proxy.password
@@ -90,15 +98,18 @@ async function socks5Handshake(socket, proxy, targetHost, targetPort) {
     let addrLen = atyp === 0x01 ? 4 : atyp === 0x04 ? 16 : atyp === 0x03 ? (await br.read(1))[0] : 0;
     if (addrLen) await br.read(addrLen + 2);
   } finally {
+    // ⚠️ 读写锁都必须释放：workerd 的 startTls() 需要独占 socket 流，
+    // 读取锁未释放会导致 TLS 升级后 writable.getWriter() 抛"写入流被占用"
     try { writer.releaseLock(); } catch {}
+    try { reader.releaseLock(); } catch {}
   }
-  // 把可能多读到的字节回灌（SOCKS5 响应通常没有多余数据，稳妥起见丢弃）
   return socket;
 }
 
 async function httpConnectHandshake(socket, proxy, targetHost, targetPort) {
   const writer = socket.writable.getWriter();
-  const br = new BufReader(socket.readable.getReader());
+  const reader = socket.readable.getReader();
+  const br = new BufReader(reader);
   const auth = proxy.username && proxy.password
     ? `Proxy-Authorization: Basic ${btoa(`${proxy.username}:${proxy.password}`)}\r\n` : '';
   try {
@@ -111,7 +122,9 @@ async function httpConnectHandshake(socket, proxy, targetHost, targetPort) {
       throw new Error(`HTTP 代理 CONNECT 失败：${new TextDecoder().decode(head).split('\r\n')[0]}`);
     }
   } finally {
+    // 同 socks5Handshake：读写锁都释放，否则 startTls 后无法取写入器
     try { writer.releaseLock(); } catch {}
+    try { reader.releaseLock(); } catch {}
   }
   return socket;
 }
@@ -123,19 +136,29 @@ export async function fetchViaProxy(targetUrl, proxyUrl, extraHeaders = {}) {
   const targetPort = target.port ? Number(target.port) : 443;
 
   const socketOpts = { allowHalfOpen: false };
-  if (proxy.scheme === 'https') socketOpts.secureTransport = 'on';       // 代理本身是 TLS
+  if (proxy.scheme === 'relay') socketOpts.secureTransport = 'starttls';  // 中继：明文连入，按目标 SNI 升级 TLS
+  else if (proxy.scheme === 'https') socketOpts.secureTransport = 'on';       // 代理本身是 TLS
   else if (proxy.scheme === 'socks5') socketOpts.secureTransport = 'starttls'; // 先明文 SOCKS5，再升级 TLS
   else socketOpts.secureTransport = 'off';                                // 明文 HTTP 代理
 
   const socket = connect({ hostname: proxy.hostname, port: proxy.port }, socketOpts);
   await socket.opened;
 
-  if (proxy.scheme === 'socks5') await socks5Handshake(socket, proxy, target.hostname, targetPort);
-  else await httpConnectHandshake(socket, proxy, target.hostname, targetPort);
+  if (proxy.scheme === 'relay') {
+    // 裸 TCP 中继无握手：直接以目标域名作 SNI 升级 TLS，由中继按 SNI 转发
+  } else if (proxy.scheme === 'socks5') {
+    await socks5Handshake(socket, proxy, target.hostname, targetPort);
+  } else {
+    await httpConnectHandshake(socket, proxy, target.hostname, targetPort);
+  }
 
-  // 升级到 TLS（SNI 用目标域名）；明文 HTTP 代理且目标为 80 端口时跳过
+  // 升级到 TLS：⚠️ startTls() 返回新 Socket 且原 socket 立即关闭，
+  // 之后必须用新 socket 的 readable/writable（官方文档明确要求）。
+  // expectedServerHostname 决定 SNI 与证书校验对象——必须传目标域名：
+  // connect() 的 hostname 是代理地址，不传会导致 TLS 握手失败（internal error）。
+  let io = socket;
   if (socketOpts.secureTransport === 'starttls') {
-    await socket.startTls({ servername: target.hostname });
+    io = socket.startTls({ expectedServerHostname: target.hostname });
   }
 
   const headers = {
@@ -149,10 +172,10 @@ export async function fetchViaProxy(targetUrl, proxyUrl, extraHeaders = {}) {
   const reqLines = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\r\n');
   let writer;
   try {
-    writer = socket.writable.getWriter();
+    writer = io.writable.getWriter();
   } catch {
     try { socket.close(); } catch {}
-    throw new Error('socket 写入流被占用（代理握手过程异常）');
+    throw new Error('TLS 升级后无法获取写入流（socket 已关闭或被占用）');
   }
   await writer.write(new TextEncoder().encode(
     `GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\n${reqLines}\r\n\r\n`
@@ -160,7 +183,7 @@ export async function fetchViaProxy(targetUrl, proxyUrl, extraHeaders = {}) {
   writer.releaseLock();
 
   // 读取响应头
-  const br = new BufReader(socket.readable.getReader());
+  const br = new BufReader(io.readable.getReader());
   const { head, rest } = await br.readUntilCRLFCRLF();
   const headText = new TextDecoder().decode(head);
   const statusLine = headText.split('\r\n')[0];
@@ -199,7 +222,7 @@ export async function fetchViaProxy(targetUrl, proxyUrl, extraHeaders = {}) {
     while (true) { try { bodyBuf = concat(bodyBuf, await readMore(br)); } catch { break; } }
   }
 
-  try { socket.close(); } catch {}
+  try { io.close(); } catch {}
   return { status, headers: respHeaders, bytes: bodyBuf };
 }
 

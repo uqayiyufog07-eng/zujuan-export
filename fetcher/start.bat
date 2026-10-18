@@ -1,42 +1,77 @@
 @echo off
-chcp 65001 >nul
+setlocal EnableExtensions
 cd /d "%~dp0"
 
+REM ============================================================
+REM  Zujuan paper fetcher (local egress + Cloudflare Tunnel)
+REM  NOTE: This file MUST stay pure ASCII. cmd.exe reads .bat as
+REM  GBK; any Chinese text becomes garbage and gets executed as
+REM  commands. Keep all messages in English.
+REM ============================================================
+
 if not exist ".env" (
-  echo [错误] 缺少 .env，请先复制 .env.example 为 .env 并填写 ZUJUAN_COOKIE 与 FETCH_KEY
+  echo [ERROR] .env not found. Copy .env.example to .env and fill
+  echo         ZUJUAN_COOKIE and FETCH_KEY first.
+  pause
+  exit /b 1
+)
+
+where node >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] Node.js not found. Install Node 18+ and retry.
   pause
   exit /b 1
 )
 
 echo.
 echo ============================================
-echo   组卷网抓取器（本地出口 + Cloudflare Tunnel）
+echo   Zujuan Fetcher  ^(local egress + CF Tunnel^)
 echo ============================================
 echo.
 
-echo [1/3] 启动本地抓取器（127.0.0.1:8788）...
+REM ---- locate cloudflared ----
+set "CFD="
+where cloudflared >nul 2>nul && set "CFD=cloudflared"
+if not defined CFD if exist "%ProgramFiles(x86)%\cloudflared\cloudflared.exe" set "CFD=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
+if not defined CFD if exist "%ProgramFiles%\cloudflared\cloudflared.exe" set "CFD=%ProgramFiles%\cloudflared\cloudflared.exe"
+if not defined CFD if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\cloudflared.exe" set "CFD=%LOCALAPPDATA%\Microsoft\WindowsApps\cloudflared.exe"
+if not defined CFD (
+  echo [ERROR] cloudflared not found. Install it:
+  echo         winget install Cloudflare.cloudflared
+  pause
+  exit /b 1
+)
+
+echo [1/3] Starting fetcher on 127.0.0.1:8788 ...
 start "zujuan-fetcher" /min node server.js
 timeout /t 2 /nobreak >nul
 
-set CFG=cloudflared-config.yml
-set CRED=C:\Users\lenovo\.cloudflared\zujuan-fetch.json
+set "CFG=cloudflared-config.yml"
+set "CREDDIR=%USERPROFILE%\.cloudflared"
 
-if exist "%CFG%" if exist "%CRED%" (
-  echo [2/3] 检测到命名隧道凭证，启动命名隧道...
-  start "zujuan-tunnel" /min cloudflared --config "%CFG%" tunnel run zujuan-fetch
+REM ---- named tunnel if any credentials json exists (named by UUID) ----
+set "HASCRED="
+if exist "%CREDDIR%" for %%F in ("%CREDDIR%\*.json") do set "HASCRED=1"
+
+if defined HASCRED if exist "%CFG%" (
+  echo [2/3] Named tunnel credentials found, starting named tunnel...
+  start "zujuan-tunnel" /min "%CFD%" --config "%CFG%" tunnel run zujuan-fetch
   echo.
-  echo [3/3] 就绪！永久地址：https://fetch.laoqian303.top
-  echo         Pages 变量配置：FETCHER_URL=https://fetch.laoqian303.top
+  echo [3/3] READY - permanent URL:
+  echo         https://fetch.laoqian303.top
+  echo         Set Pages variable: FETCHER_URL=https://fetch.laoqian303.top
   echo.
-  echo 提示：保持本窗口所在的两个后台进程运行即可关闭本窗口；
-  echo       结束抓取时在任务管理器结束 node.exe 与 cloudflared.exe。
+  echo Keep this window open. To stop: close window and end
+  echo node.exe / cloudflared.exe in Task Manager.
 ) else (
-  echo [2/3] 未检测到命名隧道凭证，使用临时隧道 Quick Tunnel。
-  echo        URL 每次重启都会变，重启后需重新配置 Pages 变量 FETCHER_URL。
+  echo [2/3] No named tunnel credentials, using QUICK tunnel ^(zero config^).
+  echo        The URL is random each start - copy it from the log below
+  echo        and set Pages variable FETCHER_URL after every restart.
   echo.
-  echo [3/3] 正在建立隧道，下面的日志里找到 https://xxxx.trycloudflare.com 即为地址...
+  echo [3/3] Establishing tunnel, look for the line:
+  echo        https://xxxx-xxxx-xxxx.trycloudflare.com
   echo.
-  cloudflared tunnel --url http://127.0.0.1:8788 --no-autoupdate
+  "%CFD%" tunnel --url http://127.0.0.1:8788 --no-autoupdate
 )
 
 pause
