@@ -93,6 +93,63 @@ push 到 `main` 即触发部署，也可在 Actions 页手动 `Run workflow`。�
 | `没有找到试卷正文` | 地址不是试卷详情页 | 换 `…/数字.html` 形式的地址 |
 | `没有可导出的答案解析` | Cookie 失效 | 重新复制组卷网 Cookie → `wrangler pages secret put ZUJUAN_COOKIE` → 重新部署 |
 
+## 机房 IP 被封：本机抓取器方案
+
+组卷网主站的阿里云 WAF 封禁所有云厂商机房 IP（Cloudflare / Azure / GCP 出口均返回 405），仅住宅/代理出口可访问。免费公网 SOCKS5 实测 14 个全部不可用。**本机抓取器 + Cloudflare Tunnel** 是 100% 可行的方案：抓取器跑在你电脑上（走你家/Clash 出口），经 Cloudflare Tunnel 暴露，Pages Function 直连被拒时自动改走它。
+
+### 快速开始（Quick Tunnel，零配置）
+
+```bash
+# 1. 确保 fetcher/.env 存在（含 ZUJUAN_COOKIE 与 FETCH_KEY）
+cd fetcher
+start.bat          # 双击也行：自动启动抓取器 + 临时隧道
+
+# 2. 日志里会出现 https://xxxx-xxxx-xxxx.trycloudflare.com，复制它
+# 3. 把该地址配到 Pages（地址重启后会变，变了要重新配）：
+npx wrangler@4.47.0 pages secret put FETCHER_URL --project-name zujuan-export
+#    粘贴 https://xxxx-xxxx-xxxx.trycloudflare.com
+```
+
+之后网页端抓取会自动走：CF 直连（405）→ 本机抓取器（成功）。
+
+### 命名隧道（永久地址，推荐长期使用）
+
+需要一次性准备（域名 `laoqian303.top` 已在 Cloudflare）：
+
+```bash
+# 1. 授权（会打开浏览器，选 laoqian303.top 域名）
+cloudflared tunnel login
+
+# 2. 创建隧道
+cloudflared tunnel create zujuan-fetch
+
+# 3. 配置 DNS（把 fetch.laoqian303.top 指向隧道）
+cloudflared tunnel route dns zujuan-fetch fetch.laoqian303.top
+
+# 4. fetcher/cloudflared-config.yml 已就绪，直接跑：
+cd fetcher && start.bat
+
+# 5. Pages 变量（永久有效，只需配一次）：
+npx wrangler@4.47.0 pages secret put FETCHER_URL --project-name zujuan-export
+#    粘贴 https://fetch.laoqian303.top
+```
+
+### 验证
+
+```bash
+# 抓取器本体（应返回 pong）
+curl http://127.0.0.1:8788/ping
+
+# 经隧道（把 URL 换成你的隧道地址）
+curl -H "x-fetch-key: 你的FETCH_KEY" "https://你的隧道地址/fetch?url=https%3A%2F%2Fzujuan.xkw.com%2F11p3514663.html" | head -c 200
+```
+
+### 说明
+
+- `FETCH_KEY` 是抓取器的访问密钥，防止公网滥用，必须与 `.env` 中的值一致
+- 抓取器只在你的电脑开机运行时可用，不用时关闭即可（不影响已生成的下载链接）
+- 图片域名 `staticzujuan.xkw.com` 不被 WAF 封禁，`/api/img` 走 Cloudflare 直连即可，不消耗抓取器
+
 ## 说明与限制
 
 - 所有解析逻辑跑在浏览器里（隐藏 iframe 渲染取回的 HTML 后复用原脚本逻辑），Worker 只做 HTTP 代理与存储，因此 CPU 不受 Workers 限制

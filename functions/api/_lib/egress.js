@@ -65,31 +65,33 @@ async function socks5Handshake(socket, proxy, targetHost, targetPort) {
   const writer = socket.writable.getWriter();
   const br = new BufReader(socket.readable.getReader());
   const enc = new TextEncoder();
+  try {
+    const greet = proxy.username && proxy.password
+      ? new Uint8Array([0x05, 0x02, 0x00, 0x02])
+      : new Uint8Array([0x05, 0x01, 0x00]);
+    await writer.write(greet);
+    const sel = await br.read(2);
+    if (sel[0] !== 0x05) throw new Error('SOCKS5 响应非法');
+    if (sel[1] === 0x02) {
+      const u = enc.encode(proxy.username), p = enc.encode(proxy.password);
+      await writer.write(new Uint8Array([0x01, u.length, ...u, p.length, ...p]));
+      const auth = await br.read(2);
+      if (auth[1] !== 0x00) throw new Error('SOCKS5 认证失败');
+    } else if (sel[1] !== 0x00) {
+      throw new Error(`SOCKS5 不支持的认证方式 ${sel[1]}`);
+    }
 
-  const greet = proxy.username && proxy.password
-    ? new Uint8Array([0x05, 0x02, 0x00, 0x02])
-    : new Uint8Array([0x05, 0x01, 0x00]);
-  await writer.write(greet);
-  const sel = await br.read(2);
-  if (sel[0] !== 0x05) throw new Error('SOCKS5 响应非法');
-  if (sel[1] === 0x02) {
-    const u = enc.encode(proxy.username), p = enc.encode(proxy.password);
-    await writer.write(new Uint8Array([0x01, u.length, ...u, p.length, ...p]));
-    const auth = await br.read(2);
-    if (auth[1] !== 0x00) throw new Error('SOCKS5 认证失败');
-  } else if (sel[1] !== 0x00) {
-    throw new Error(`SOCKS5 不支持的认证方式 ${sel[1]}`);
+    const hb = enc.encode(targetHost);
+    await writer.write(new Uint8Array([0x05, 0x01, 0x00, 0x03, hb.length, ...hb, targetPort >> 8, targetPort & 0xff]));
+    const resp = await br.read(4);
+    if (resp[1] !== 0x00) throw new Error(`SOCKS5 连接目标失败（code ${resp[1]}）`);
+    // 读取绑定地址（ATYP + addr + port），避免残留字节污染 TLS 流
+    const atyp = (await br.read(1))[0];
+    let addrLen = atyp === 0x01 ? 4 : atyp === 0x04 ? 16 : atyp === 0x03 ? (await br.read(1))[0] : 0;
+    if (addrLen) await br.read(addrLen + 2);
+  } finally {
+    try { writer.releaseLock(); } catch {}
   }
-
-  const hb = enc.encode(targetHost);
-  await writer.write(new Uint8Array([0x05, 0x01, 0x00, 0x03, hb.length, ...hb, targetPort >> 8, targetPort & 0xff]));
-  const resp = await br.read(4);
-  if (resp[1] !== 0x00) throw new Error(`SOCKS5 连接目标失败（code ${resp[1]}）`);
-  // 读取绑定地址（ATYP + addr + port），避免残留字节污染 TLS 流
-  const atyp = (await br.read(1))[0];
-  let addrLen = atyp === 0x01 ? 4 : atyp === 0x04 ? 16 : atyp === 0x03 ? (await br.read(1))[0] : 0;
-  if (addrLen) await br.read(addrLen + 2);
-  writer.releaseLock();
   // 把可能多读到的字节回灌（SOCKS5 响应通常没有多余数据，稳妥起见丢弃）
   return socket;
 }
@@ -99,14 +101,17 @@ async function httpConnectHandshake(socket, proxy, targetHost, targetPort) {
   const br = new BufReader(socket.readable.getReader());
   const auth = proxy.username && proxy.password
     ? `Proxy-Authorization: Basic ${btoa(`${proxy.username}:${proxy.password}`)}\r\n` : '';
-  await writer.write(new TextEncoder().encode(
-    `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n${auth}User-Agent: ${UA}\r\nConnection: keep-alive\r\n\r\n`
-  ));
-  writer.releaseLock();
-  const { head } = await br.readUntilCRLFCRLF();
-  const status = new TextDecoder().decode(head).split('\r\n')[0].match(/HTTP\/\d\.\d\s+(\d+)/);
-  if (!status || Number(status[1]) < 200 || Number(status[1]) >= 300) {
-    throw new Error(`HTTP 代理 CONNECT 失败：${new TextDecoder().decode(head).split('\r\n')[0]}`);
+  try {
+    await writer.write(new TextEncoder().encode(
+      `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n${auth}User-Agent: ${UA}\r\nConnection: keep-alive\r\n\r\n`
+    ));
+    const { head } = await br.readUntilCRLFCRLF();
+    const status = new TextDecoder().decode(head).split('\r\n')[0].match(/HTTP\/\d\.\d\s+(\d+)/);
+    if (!status || Number(status[1]) < 200 || Number(status[1]) >= 300) {
+      throw new Error(`HTTP 代理 CONNECT 失败：${new TextDecoder().decode(head).split('\r\n')[0]}`);
+    }
+  } finally {
+    try { writer.releaseLock(); } catch {}
   }
   return socket;
 }
@@ -142,7 +147,13 @@ export async function fetchViaProxy(targetUrl, proxyUrl, extraHeaders = {}) {
     ...extraHeaders,
   };
   const reqLines = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\r\n');
-  const writer = socket.writable.getWriter();
+  let writer;
+  try {
+    writer = socket.writable.getWriter();
+  } catch {
+    try { socket.close(); } catch {}
+    throw new Error('socket 写入流被占用（代理握手过程异常）');
+  }
   await writer.write(new TextEncoder().encode(
     `GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\n${reqLines}\r\n\r\n`
   ));
