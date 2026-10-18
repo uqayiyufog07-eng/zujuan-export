@@ -1,0 +1,24 @@
+name: Reachability Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 要测试的 URL
+        required: true
+        default: https://zujuan.xkw.com/11p3514663.html
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe from GitHub Actions runner
+        run: |
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"
+          echo "runner egress: $(curl -s --max-time 10 https://api.ipify.org)"
+          echo "target: ${{ inputs.target }}"
+          curl -s -o /tmp/probe.html --max-time 25 -A "$UA" \
+            -H "Referer: https://zujuan.xkw.com/" \
+            -b 'xkw-device-id=F4E9E7962B2DFC7150F512CEBF911B06; UT1=ut-116479-SsVVZKIgSwBxTQ; acw_tc=76b20f9017922866663794751e00aa1bb21f889317705ac6205f1ce932849c' \
+            -w "HTTP %{http_code} size %{size_download}\n" "${{ inputs.target }}"
+          head -c 200 /tmp/probe.html; echo
