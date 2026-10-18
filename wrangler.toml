@@ -10,10 +10,10 @@ bucket_name = "zujuan-exports"
 # 导出记录索引
 [[kv_namespaces]]
 binding = "EXPORT_INDEX"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
+id = "67aaf54830b94701a9ea710de3351f78"
+preview_id = "45ab7fd5be6843e3add668b18d8d76ae"
 
 # 组卷网登录 Cookie（解决答案解析等需登录内容；不要在仓库里明文写）
-# 本地/线上配置方式：
-#   wrangler pages secret put ZUJUAN_COOKIE
-# 或在 Cloudflare Dashboard → Pages → zujuan-export → Settings → Environment variables 中添加 ZUJUAN_COOKIE
+# 本地配置：wrangler pages secret put ZUJUAN_COOKIE
+# Dashboard：Pages → zujuan-export → Settings → Environment variables 添加 ZUJUAN_COOKIE
+# 注意：Cookie 是运行时变量，不要放进 GitHub Secrets 让 Action 写入

@@ -21,21 +21,27 @@ wrangler.toml                Pages 配置 + R2 / KV 绑定
 
 ## 一次性准备
 
+以下资源**已创建好**（2026-10-18）：
+
+| 资源 | 名称 / ID | 说明 |
+| --- | --- | --- |
+| R2 Bucket | `zujuan-exports` | 存放导出的 docx / pdf |
+| KV Namespace | `EXPORT_INDEX` `67aaf54830b94701a9ea710de3351f78` | 导出记录索引（已写入 wrangler.toml） |
+| Pages 项目 | `zujuan-export` | 生产分支 main |
+
+还差两步（都涉及密钥，只能人工做）：
+
 ```bash
-# 1) 创建存储资源
-wrangler r2 bucket create zujuan-exports
-wrangler kv namespace create EXPORT_INDEX
-
-# 2) 把返回的 id 填进 wrangler.toml 的 [[kv_namespaces]]
-#    id = "..."  preview_id = "..."
-
-# 3) 配置登录 Cookie（组卷网 F12 → Network → 任一请求 → 复制 Cookie 整行）
+# 1) 配置登录 Cookie（组卷网 F12 → Network → 任一请求 → 复制 Cookie 整行）
 wrangler pages secret put ZUJUAN_COOKIE
+#    或在 Dashboard：Pages → zujuan-export → Settings → Environment variables
 
-# 4) 首次创建 Pages 项目（也可由 Action 自动创建）
-wrangler pages project create zujuan-export --production-branch=main
+# 2) 给 GitHub 仓库加两个 Secret（见下方）
+```
 
-# 5) 本地预览
+本地预览：
+
+```bash
 wrangler pages dev public
 ```
 
@@ -43,10 +49,22 @@ wrangler pages dev public
 
 仓库 **Settings → Secrets and variables → Actions** 需要添加两个 Secret：
 
-| Secret | 说明 |
-| --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token，权限至少 `Cloudflare Pages:Edit`、`Workers KV Storage:Edit`、`Workers R2 Storage:Edit` |
-| `CLOUDFLARE_ACCOUNT_ID` | 账号 ID |
+| Secret | 值 | 说明 |
+| --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | `5dbfeeed2915872f0855a916283d82c4` | 账号 ID（已可直接填） |
+| `CLOUDFLARE_API_TOKEN` | 需自己创建 | 见下方步骤，**不要**用 wrangler 本地 OAuth token 代替 |
+
+创建 `CLOUDFLARE_API_TOKEN`（Cloudflare Dashboard → 右上角头像 → **My Profile → API Tokens → Create Token**）：
+
+1. 选 **Create Custom Token**
+2. 权限（Permissions）三行：
+   - `Account` → `Cloudflare Pages` → `Edit`
+   - `Account` → `Workers R2 Storage` → `Edit`
+   - `Account` → `Workers KV Storage` → `Edit`
+3. Account Resources 选 `Include - 你的账号`
+4. 创建后复制那串 `xxxx-xxxx...`（**只显示一次**）粘到 GitHub Secret
+
+> 本机 wrangler 的 OAuth 凭据**无法**通过 API 创建 API Token（会报 9109 Unauthorized），必须用网页 My Profile 页面手动创建，或用 Global API Key（不推荐）。
 
 push 到 `main` 即触发部署，也可在 Actions 页手动 `Run workflow`。部署完成后 Action 摘要里会给出地址。
 
