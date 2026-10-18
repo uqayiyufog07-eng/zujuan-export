@@ -6,11 +6,25 @@
 //   3) 本地抓取器（FETCHER_URL + FETCH_KEY，经 Cloudflare Tunnel 暴露你电脑的出口）
 // 背景：zujuan.xkw.com 的阿里云 WAF 会 405 封禁 Cloudflare/Azure 等机房 IP，
 //       只有住宅/代理出口能访问；图片域名 staticzujuan.xkw.com 则可被 CF 直连。
+//
+// 注意（2026-10-18 修）：不要在这里对整页 HTML 做 /<script[\s\S]*?<\/script>/gi
+// 之类的全局正则——Workers 免费版 CPU 仅 10ms，200KB 文档上会被直接杀死，
+// Cloudflare 边缘返回 502 text/html 错误页（表现为前端"服务响应格式异常"）。
+// 前端渲染用 sandbox iframe（无 allow-scripts），script 本就不会执行，无需删除。
 import { fetchViaProxy } from './_lib/egress.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
-export async function onRequestGet({ request, env }) {
+export async function onRequestGet(context) {
+  try {
+    return await handle(context);
+  } catch (e) {
+    // 兜底：任何未捕获异常都以 JSON 返回，避免 Cloudflare 502 HTML 错误页
+    return json({ error: `抓取服务内部错误：${e?.message || e}` }, 500);
+  }
+}
+
+async function handle({ request, env }) {
   const target = new URL(request.url).searchParams.get('url') || '';
   let page;
   try {
@@ -34,8 +48,7 @@ export async function onRequestGet({ request, env }) {
   try {
     const res = await fetch(page.href, { headers, redirect: 'follow', signal: AbortSignal.timeout(20000) });
     if (res.ok) {
-      let html = await res.text();
-      html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+      const html = await res.text();
       const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
       return json({ html, title, base: page.href, via: 'direct' });
     }
@@ -49,8 +62,7 @@ export async function onRequestGet({ request, env }) {
     try {
       const r = await fetchViaProxy(page.href, env.PROXY_URL, env.ZUJUAN_COOKIE ? { Cookie: env.ZUJUAN_COOKIE } : {});
       if (r.status >= 200 && r.status < 300) {
-        let html = new TextDecoder().decode(r.bytes);
-        html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
+        const html = new TextDecoder().decode(r.bytes);
         const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
         return json({ html, title, base: page.href, via: 'proxy' });
       }

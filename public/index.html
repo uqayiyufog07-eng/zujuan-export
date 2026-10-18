@@ -990,22 +990,38 @@ $('#envBannerClose').addEventListener('click',()=>{ $('#envBanner').hidden=true;
 
 async function loadPaper(url){
   if(!apiAvailable) throw new Error(`抓取服务在当前环境不可用。请通过部署地址 ${DEPLOY_URL} 打开本页面后重试。`);
-  let res;
-  try{ res=await fetch('/api/paper?url='+encodeURIComponent(url),{signal:AbortSignal.timeout(30000)}); }
-  catch(e){ throw new Error(e.name==='TimeoutError'?'请求超时：抓取服务 30 秒未响应，请稍后重试。':'网络错误：'+e.message); }
-  const ct=res.headers.get('content-type')||'';
-  const clone=res.clone();
-  let data=null;
-  try{ data=await res.json(); }
-  catch{
-    let snippet='';
-    try{ snippet=(await clone.text()).replace(/\s+/g,' ').trim().slice(0,160); }catch{}
-    let msg=`服务响应格式异常（HTTP ${res.status} · ${ct||'未知内容类型'}）`;
-    if(snippet) msg+='：'+snippet;
-    if(!apiAvailable) msg+=`。请通过部署地址 ${DEPLOY_URL} 打开本页面。`;
-    throw new Error(msg);
+  const MAX_TRY=3;
+  for(let attempt=1;attempt<=MAX_TRY;attempt++){
+    let res;
+    try{ res=await fetch('/api/paper?url='+encodeURIComponent(url),{signal:AbortSignal.timeout(30000)}); }
+    catch(e){
+      if(attempt<MAX_TRY){ status(`网络波动，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
+      throw new Error(e.name==='TimeoutError'?'请求超时：抓取服务 30 秒未响应，请稍后重试。':'网络错误：'+e.message);
+    }
+    const ct=res.headers.get('content-type')||'';
+    const clone=res.clone();
+    let data=null;
+    try{ data=await res.json(); }
+    catch{
+      // 非 JSON（如 Cloudflare 边缘 502 HTML 错误页，多为瞬时故障）→ 自动重试
+      let snippet='';
+      try{ snippet=(await clone.text()).replace(/\s+/g,' ').trim().slice(0,160); }catch{}
+      if(attempt<MAX_TRY){ status(`服务返回异常内容，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
+      let msg=`服务响应格式异常（HTTP ${res.status} · ${ct||'未知内容类型'}）`;
+      if(snippet) msg+='：'+snippet;
+      msg+='。已自动重试 '+MAX_TRY+' 次，可能是网络/代理到 Cloudflare 的链路瞬时故障，请稍后重试或更换网络环境。';
+      if(!apiAvailable) msg+=`。另请通过部署地址 ${DEPLOY_URL} 打开本页面。`;
+      throw new Error(msg);
+    }
+    if(!res.ok){
+      // 仅 5xx 重试；4xx 是明确错误（无效网址等），不浪费重试
+      if(res.status>=500&&attempt<MAX_TRY){ status(`服务端 ${res.status}，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
+      throw new Error(data.error||`抓取失败（${res.status}）`);
+    }
+    return await renderPaper(data);
   }
-  if(!res.ok) throw new Error(data.error||`抓取失败（${res.status}）`);
+}
+async function renderPaper(data){
   const f=getFrame();
   await new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>reject(new Error('页面渲染超时')),15000);

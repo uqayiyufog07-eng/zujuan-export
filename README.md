@@ -88,6 +88,7 @@ push 到 `main` 即触发部署，也可在 Actions 页手动 `Run workflow`。�
 | 报错关键词 | 原因 | 处理 |
 | --- | --- | --- |
 | `服务响应格式异常` | 页面不在部署环境打开，或 CDN 边缘缓存 | 用 https://zujuan-export.pages.dev 打开；强刷（Ctrl+F5） |
+| `服务响应格式异常（HTTP 502 · text/html）` | Cloudflare 边缘瞬时故障（502 HTML 错误页），或旧版 Function 正则超 CPU 被终止 | 前端已内置自动重试 3 次；重试仍失败请更换网络/代理环境；确认已部署最新版（2026-10-18 修复） |
 | `目标站点返回 405` | CF 机房 IP 被 WAF 封 | 配置 `PROXY_URL`（SOCKS5 代理出口）或保持本机抓取器 + Cloudflare Tunnel 运行 |
 | `没有找到试卷正文` | 地址不是试卷详情页 | 换 `…/数字.html` 形式的地址 |
 | `没有可导出的答案解析` | Cookie 失效 | 重新复制组卷网 Cookie → `wrangler pages secret put ZUJUAN_COOKIE` → 重新部署 |
