@@ -33,8 +33,8 @@ wrangler.toml                Pages 配置 + R2 / KV 绑定
 
 ```bash
 # 1) 配置登录 Cookie（组卷网 F12 → Network → 任一请求 → 复制 Cookie 整行）
+#    已于 2026-10-18 配置到 Pages 生产环境（ZUJUAN_COOKIE），本地开发读 .dev.vars（已 gitignore）
 wrangler pages secret put ZUJUAN_COOKIE
-#    或在 Dashboard：Pages → zujuan-export → Settings → Environment variables
 
 # 2) 给 GitHub 仓库加两个 Secret（见下方）
 ```
