@@ -72,13 +72,25 @@ push 到 `main` 即触发部署，也可在 Actions 页手动 `Run workflow`。�
 
 ## 使用说明
 
-1. 打开部署后的站点
+1. 打开部署后的站点：**https://zujuan-export.pages.dev**
+   - ⚠️ 必须通过部署地址访问。直接双击 `index.html`（file://）或用本地静态服务器打开时，页面会弹出黄色横幅提示「当前环境没有后端服务」——因为 `/api/paper`、`/api/files` 等接口只存在于 Cloudflare Pages 部署环境中
 2. 粘贴形如 `https://zujuan.xkw.com/11p3514663.html` 的试卷详情页地址
 3. 选格式：
    - **Word · 可编辑**：文字/表格可改，公式与插图转为图片（推荐）
    - **Word · 整题图片**：每题整体截图，版式 100% 还原、不可编辑
    - **PDF**：A4 分页，勾选「包含答案和解析」需要 Cookie 已登录
 4. 点击生成，完成后可「本地下载」或「云端存档下载」；页面底部列出最近导出记录
+
+### 抓取失败排查
+
+当前组卷网主站（zujuan.xkw.com）的阿里云 WAF 封禁所有云厂商机房 IP（Cloudflare / Azure / GCP 均返回 405），仅住宅/代理出口可访问。页面若提示抓取失败，按以下顺序排查：
+
+| 报错关键词 | 原因 | 处理 |
+| --- | --- | --- |
+| `服务响应格式异常` | 页面不在部署环境打开，或 CDN 边缘缓存 | 用 https://zujuan-export.pages.dev 打开；强刷（Ctrl+F5） |
+| `目标站点返回 405` | CF 机房 IP 被 WAF 封 | 配置 `PROXY_URL`（SOCKS5 代理出口）或保持本机抓取器 + Cloudflare Tunnel 运行 |
+| `没有找到试卷正文` | 地址不是试卷详情页 | 换 `…/数字.html` 形式的地址 |
+| `没有可导出的答案解析` | Cookie 失效 | 重新复制组卷网 Cookie → `wrangler pages secret put ZUJUAN_COOKIE` → 重新部署 |
 
 ## 说明与限制
 

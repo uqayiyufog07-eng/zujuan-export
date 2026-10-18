@@ -46,11 +46,22 @@ h2{font-size:15px;margin-bottom:10px}
 .hist a{color:var(--accent);text-decoration:none;word-break:break-all}
 .hist .meta{color:var(--muted);font-size:12px;white-space:nowrap}
 .hist .empty{color:var(--muted)}
+.env-banner{display:flex;align-items:flex-start;gap:10px;background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:11px 13px;margin-bottom:14px;font-size:13.5px;color:#92400e;line-height:1.6}
+.env-banner[hidden]{display:none}
+.env-banner .env-body{flex:1;min-width:0}
+.env-banner a{color:#b45309;font-weight:600}
+.env-banner button{border:0;background:none;color:#92400e;font-size:16px;line-height:1;cursor:pointer;padding:2px 4px;opacity:.7}
+.env-banner button:hover{opacity:1}
 @media (max-width:480px){body{padding:14px 10px}.card{padding:16px}}
 </style>
 </head>
 <body>
 <div class="wrap">
+  <div class="env-banner" id="envBanner" hidden>
+    <span class="env-body" id="envBannerText"></span>
+    <a href="https://zujuan-export.pages.dev" target="_blank" rel="noopener">打开部署地址 →</a>
+    <button type="button" id="envBannerClose" aria-label="关闭">×</button>
+  </div>
   <div class="card">
     <h1>组卷网试卷导出</h1>
     <div class="sub">输入试卷详情页网址（形如 https://zujuan.xkw.com/11p3514663.html），在线生成并下载 Word / PDF，文件同时归档到云端存储。</div>
@@ -950,11 +961,50 @@ function getFrame(){
   document.body.appendChild(frame);
   return frame;
 }
+/* ---------- 运行环境检测 ----------
+   /api/paper 等接口只有部署在 Cloudflare Pages（或 wrangler pages dev）时才存在。
+   以 file:// 打开、本地静态服务器、WorkBuddy 预览等环境下这些路径会返回 HTML
+   （404 页或 SPA fallback），导致 res.json() 解析失败。 */
+const DEPLOY_URL='https://zujuan-export.pages.dev';
+let apiAvailable=true;
+function showEnvBanner(text){
+  $('#envBannerText').textContent=text;
+  $('#envBanner').hidden=false;
+}
+$('#envBannerClose').addEventListener('click',()=>{ $('#envBanner').hidden=true; });
+(async function probeApi(){
+  if(location.protocol==='file:'){
+    apiAvailable=false;
+    showEnvBanner('当前页面以本地文件方式打开（file://），抓取与云存储服务均不可用。');
+    return;
+  }
+  try{
+    const res=await fetch('/api/files',{cache:'no-store'});
+    const ct=res.headers.get('content-type')||'';
+    if(!ct.includes('json')){
+      apiAvailable=false;
+      showEnvBanner(`当前访问环境（${location.hostname||location.origin||'未知'}）没有后端服务，导出功能不可用。请通过部署地址 ${DEPLOY_URL} 使用。`);
+    }
+  }catch{ /* 网络抖动，不打扰用户 */ }
+})();
+
 async function loadPaper(url){
+  if(!apiAvailable) throw new Error(`抓取服务在当前环境不可用。请通过部署地址 ${DEPLOY_URL} 打开本页面后重试。`);
   let res;
   try{ res=await fetch('/api/paper?url='+encodeURIComponent(url),{signal:AbortSignal.timeout(30000)}); }
   catch(e){ throw new Error(e.name==='TimeoutError'?'请求超时：抓取服务 30 秒未响应，请稍后重试。':'网络错误：'+e.message); }
-  const data=await res.json().catch(()=>({error:'服务响应格式异常'}));
+  const ct=res.headers.get('content-type')||'';
+  const clone=res.clone();
+  let data=null;
+  try{ data=await res.json(); }
+  catch{
+    let snippet='';
+    try{ snippet=(await clone.text()).replace(/\s+/g,' ').trim().slice(0,160); }catch{}
+    let msg=`服务响应格式异常（HTTP ${res.status} · ${ct||'未知内容类型'}）`;
+    if(snippet) msg+='：'+snippet;
+    if(!apiAvailable) msg+=`。请通过部署地址 ${DEPLOY_URL} 打开本页面。`;
+    throw new Error(msg);
+  }
   if(!res.ok) throw new Error(data.error||`抓取失败（${res.status}）`);
   const f=getFrame();
   await new Promise((resolve,reject)=>{
@@ -1053,7 +1103,7 @@ async function loadHistory(){
       const time=(f.createdAt||'').slice(0,16).replace('T',' ');
       return `<li><a href="${href}">${esc(f.filename)}</a><span class="meta">${size} · ${time}</span></li>`;
     }).join('');
-  }catch{ ul.innerHTML='<li class="empty">记录加载失败（服务端可能未配置 KV）</li>'; }
+  }catch{ ul.innerHTML=`<li class="empty">${apiAvailable?'记录加载失败（服务端可能未配置 KV）':'当前环境没有后端服务，请通过部署地址 '+DEPLOY_URL+' 使用'}</li>`; }
 }
 loadHistory();
 </script>

@@ -1,0 +1,7 @@
+tunnel: zujuan-fetch
+credentials-file: C:/Users/lenovo/.cloudflared/zujuan-fetch.json
+
+ingress:
+  - hostname: fetch.laoqian303.top
+    service: http://127.0.0.1:8788
+  - service: http_status:404
