@@ -998,18 +998,30 @@ async function loadPaper(url){
       if(attempt<MAX_TRY){ status(`网络波动，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
       throw new Error(e.name==='TimeoutError'?'请求超时：抓取服务 30 秒未响应，请稍后重试。':'网络错误：'+e.message);
     }
+    const via=res.headers.get('x-paper-via');
     const ct=res.headers.get('content-type')||'';
+    // 正常抓取结果：Function 流式透传 HTML，元数据在 header 里（无 JSON 序列化，省 Worker CPU）
+    if(res.ok&&via){
+      const html=await res.text();
+      const title=(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)||[,''])[1].trim();
+      const base=decodeURIComponent(res.headers.get('x-paper-base')||encodeURIComponent(url));
+      return renderPaper({html,title,base,via});
+    }
+    // 非部署环境：/api/paper 被 404/fallback 成 HTML（无 x-paper-via 标记且非 5xx）→ 明确报错不重试
+    if(!via&&ct.includes('text/html')&&res.status<500){
+      throw new Error(`抓取服务在当前环境不可用（HTTP ${res.status} · ${ct}）。请通过部署地址 ${DEPLOY_URL} 打开本页面。`);
+    }
     const clone=res.clone();
     let data=null;
     try{ data=await res.json(); }
     catch{
-      // 非 JSON（如 Cloudflare 边缘 502 HTML 错误页，多为瞬时故障）→ 自动重试
+      // 非 JSON（如 Cloudflare 边缘 502 HTML 错误页）→ 5xx 自动重试
       let snippet='';
       try{ snippet=(await clone.text()).replace(/\s+/g,' ').trim().slice(0,160); }catch{}
-      if(attempt<MAX_TRY){ status(`服务返回异常内容，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
+      if(res.status>=500&&attempt<MAX_TRY){ status(`服务端返回 ${res.status} 错误页，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
       let msg=`服务响应格式异常（HTTP ${res.status} · ${ct||'未知内容类型'}）`;
       if(snippet) msg+='：'+snippet;
-      msg+='。已自动重试 '+MAX_TRY+' 次，可能是网络/代理到 Cloudflare 的链路瞬时故障，请稍后重试或更换网络环境。';
+      msg+='。已自动重试 '+MAX_TRY+' 次，可能是网络/代理到 Cloudflare 的链路故障，请稍后重试或更换网络环境。';
       if(!apiAvailable) msg+=`。另请通过部署地址 ${DEPLOY_URL} 打开本页面。`;
       throw new Error(msg);
     }
@@ -1018,7 +1030,7 @@ async function loadPaper(url){
       if(res.status>=500&&attempt<MAX_TRY){ status(`服务端 ${res.status}，第 ${attempt+1}/${MAX_TRY} 次重试…`,'info'); await new Promise(r=>setTimeout(r,1000*attempt)); continue; }
       throw new Error(data.error||`抓取失败（${res.status}）`);
     }
-    return await renderPaper(data);
+    throw new Error(data.error||'抓取失败：服务端返回了无法识别的响应');
   }
 }
 async function renderPaper(data){

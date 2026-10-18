@@ -88,10 +88,10 @@ const server = createServer(async (req, res) => {
       return send(res, 200, buf, { 'Content-Type': type, 'Cache-Control': 'public, max-age=86400' });
     }
 
-    // /fetch：剔除脚本后返回 HTML
-    let html = await up.text();
-    html = html.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/<noscript[\s\S]*?<\/noscript>/gi, '');
-    send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' });
+    // /fetch：直接透传 HTML（不删 script——前端 sandbox iframe 无 allow-scripts，
+    // script 不会执行；且大正则虽然 Node 无 CPU 限制，删掉保持一致、省内存）
+    const html = await up.text();
+    send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8', 'X-Paper-Via': 'fetcher', 'Cache-Control': 'no-store' });
   } catch (e) {
     const msg = e.name === 'TimeoutError' ? 'upstream timeout' : String(e.message || e);
     send(res, 502, msg, { 'Content-Type': 'text/plain' });

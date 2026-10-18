@@ -7,10 +7,14 @@
 // 背景：zujuan.xkw.com 的阿里云 WAF 会 405 封禁 Cloudflare/Azure 等机房 IP，
 //       只有住宅/代理出口能访问；图片域名 staticzujuan.xkw.com 则可被 CF 直连。
 //
-// 注意（2026-10-18 修）：不要在这里对整页 HTML 做 /<script[\s\S]*?<\/script>/gi
-// 之类的全局正则——Workers 免费版 CPU 仅 10ms，200KB 文档上会被直接杀死，
-// Cloudflare 边缘返回 502 text/html 错误页（表现为前端"服务响应格式异常"）。
-// 前端渲染用 sandbox iframe（无 allow-scripts），script 本就不会执行，无需删除。
+// ⚠️ CPU 纪律（2026-10-18，两次 502 HTML 事故的教训）：
+// Workers 免费版每个请求只有 10ms CPU。以下操作在 200KB 试卷页上会超标被杀，
+// Cloudflare 边缘返回 502 text/html 错误页（前端表现为"服务响应格式异常"）：
+//   ✗ 整页全局正则 /<script[\s\S]*?<\/script>/gi（已删）
+//   ✗ await res.text() 解码 + JSON.stringify 序列化 + UTF-8 编码回传（已改为流式透传）
+// 因此本 Function 对 HTML 响应一律 new Response(body) 流式透传，零文本处理；
+// title 提取也移到前端（浏览器无 CPU 限制）。前端 sandbox iframe 无 allow-scripts，
+// script 本就不会执行，无需在服务端删除。
 import { fetchViaProxy } from './_lib/egress.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -22,6 +26,19 @@ export async function onRequestGet(context) {
     // 兜底：任何未捕获异常都以 JSON 返回，避免 Cloudflare 502 HTML 错误页
     return json({ error: `抓取服务内部错误：${e?.message || e}` }, 500);
   }
+}
+
+// HTML 透传响应：元数据放 header，前端以 x-paper-via 识别"这是抓取结果"
+function passThrough(body, base, via) {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'X-Paper-Base': encodeURIComponent(base),
+      'X-Paper-Via': via,
+      'Cache-Control': 'no-store',
+    },
+  });
 }
 
 async function handle({ request, env }) {
@@ -44,14 +61,10 @@ async function handle({ request, env }) {
 
   const errors = [];
 
-  // ---- 通道 1：Workers 直连 ----
+  // ---- 通道 1：Workers 直连（流式透传，零 CPU）----
   try {
     const res = await fetch(page.href, { headers, redirect: 'follow', signal: AbortSignal.timeout(20000) });
-    if (res.ok) {
-      const html = await res.text();
-      const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
-      return json({ html, title, base: page.href, via: 'direct' });
-    }
+    if (res.ok) return passThrough(res.body, page.href, 'direct');
     errors.push(`直连返回 ${res.status}`);
   } catch (e) {
     errors.push(`直连失败（${e.name === 'TimeoutError' ? '超时' : e.message}）`);
@@ -61,11 +74,7 @@ async function handle({ request, env }) {
   if (env.PROXY_URL) {
     try {
       const r = await fetchViaProxy(page.href, env.PROXY_URL, env.ZUJUAN_COOKIE ? { Cookie: env.ZUJUAN_COOKIE } : {});
-      if (r.status >= 200 && r.status < 300) {
-        const html = new TextDecoder().decode(r.bytes);
-        const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
-        return json({ html, title, base: page.href, via: 'proxy' });
-      }
+      if (r.status >= 200 && r.status < 300) return passThrough(r.bytes, page.href, 'proxy');
       errors.push(`代理出口返回 ${r.status}`);
     } catch (e) {
       errors.push(`代理出口失败（${e.message || e}）`);
@@ -81,11 +90,7 @@ async function handle({ request, env }) {
         headers: fHeaders,
         signal: AbortSignal.timeout(30000),
       });
-      if (res.ok) {
-        const html = await res.text();
-        const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].trim();
-        return json({ html, title, base: page.href, via: 'fetcher' });
-      }
+      if (res.ok) return passThrough(res.body, page.href, 'fetcher');
       errors.push(`本地抓取器返回 ${res.status}`);
     } catch (e) {
       errors.push(`本地抓取器不可达（${e.name === 'TimeoutError' ? '超时' : e.message}）`);
